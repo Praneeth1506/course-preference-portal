@@ -1,0 +1,7 @@
+
+# Environment variables and secrets
+member2/.env
+
+# Python cache files
+__pycache__/
+*.py[cod]
