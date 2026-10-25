@@ -1,18 +1,7 @@
-# Python
+
+# Environment variables and secrets
+member2/.env
+
+# Python cache files
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.venv/
-venv/
-backend/.env
-
-# Node
-node_modules/
-frontend/dist/
-frontend/.env
-
-# Local tooling
-.DS_Store
-.idea/
-.vscode/
-*.log
