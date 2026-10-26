@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .database import ensure_indexes
+from .database import database_is_reachable, ensure_indexes
 from .routers import auth, courses, forms, public
 
 logging.basicConfig(
@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    if not database_is_reachable():
+        logger.error(
+            "MongoDB is not reachable at MONGO_URI (database %r). Start MongoDB "
+            "or fix MONGO_URI in backend/.env; database endpoints will fail "
+            "until it is reachable.",
+            settings.mongo_db_name,
+        )
     try:
         ensure_indexes()
     except Exception as exc:  # pragma: no cover - startup resilience
@@ -57,4 +64,7 @@ app.include_router(public.router)
 
 @app.get("/api/health", tags=["health"])
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "database": "ok" if database_is_reachable() else "unavailable",
+    }

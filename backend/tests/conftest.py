@@ -16,6 +16,8 @@ os.environ.setdefault("FRONTEND_BASE_URL", "http://frontend.test:5173")
 os.environ.setdefault("ADMIN_USERNAME", "admin")
 os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
 os.environ.setdefault("JWT_SECRET", "test-only-jwt-secret-not-for-production")
+# Keep a developer's backend/.env hash from overriding the test password above.
+os.environ.setdefault("ADMIN_PASSWORD_HASH", "")
 
 import mongomock  # noqa: E402
 import pytest  # noqa: E402

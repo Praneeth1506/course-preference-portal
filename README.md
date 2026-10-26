@@ -55,10 +55,12 @@ backend/
   scripts/e2e_smoke.py   Live end-to-end HTTP verification
 frontend/
   src/
-    App.jsx              Admin/public routes
-    api.js               API client and error formatting
+    App.jsx              Routes: faculty form (/, /forms/:token), /login, /admin/*
+    api.js               Admin API client and error formatting
     AuthContext.jsx      Session handling
-    pages/               Login, forms, builder, public form, responses
+    formBuilderLogic.js  Form builder state helpers (unit tested)
+    pages/               Login, forms, builder, responses
+    features/faculty-form/  Faculty-facing preference form (Member 4)
     components.jsx       Share panel, copy link, badges, loaders
 ```
 
@@ -89,14 +91,20 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env   # then set JWT_SECRET and ADMIN_PASSWORD_HASH (see below)
 python -m app.seed
 uvicorn app.main:app --reload --port 8000
 ```
 
 - API: <http://localhost:8000>
 - Interactive docs: <http://localhost:8000/docs>
-- Health check: <http://localhost:8000/api/health>
+- Health check: <http://localhost:8000/api/health> returns
+  `{"status": "ok", "database": "ok"}`; `"database": "unavailable"` means
+  MongoDB cannot be reached at `MONGO_URI` (the startup log says the same).
+
+The frontend dev server proxies `/api` to port 8000. If that port is taken,
+run uvicorn with `--port 8001` and start the frontend with
+`VITE_API_BASE_URL=http://localhost:8001` (in `frontend/.env`).
 
 `app.seed` is safe to rerun. It upserts sample courses by course code and only
 creates the demo draft form when the `forms` collection is empty. It never
@@ -115,17 +123,22 @@ npm run dev
 
 Open <http://localhost:5173>.
 
-The example configuration uses the local administrator credentials
-`admin` / `admin123`. **Change `ADMIN_PASSWORD` and `JWT_SECRET` before
-deploying or sharing the app.** Credentials are configured only in the backend
-environment; they are not stored in or sent to the frontend.
+The backend refuses to start until `JWT_SECRET` (32+ characters) and an admin
+password (`ADMIN_PASSWORD_HASH`, or `ADMIN_PASSWORD` for local use only) are
+set in `backend/.env`; there are no built-in default credentials. Credentials
+are configured only in the backend environment; they are not stored in or sent
+to the frontend.
 
 ### 3. Demonstrate the full flow
 
-1. Sign in at <http://localhost:5173/login>.
-2. Select **New form**, enter a title, and add one or more questions.
-3. For each question, check the courses that faculty may choose.
-4. Select **Publish form**.
+1. Sign in at <http://localhost:5173/login> (or open <http://localhost:5173/admin>).
+2. Select **New form**, enter a title, and set the **Number of preference
+   questions**; one section appears per question.
+3. For each question, optionally restrict it to a semester, then check the
+   courses faculty may choose. A course used in one question is disabled in
+   the others, and every question needs at least one course.
+4. Use **Preview** to check the configuration, then **Save draft** or
+   **Publish form**.
 5. The share panel displays the real public URL. Use **Copy link** or **Open
    form**; the link has the form `/forms/<random-token>`.
 6. On the public page, enter a faculty name and faculty ID, then choose one
@@ -146,28 +159,36 @@ environment; they are not stored in or sent to the frontend.
 | `FRONTEND_BASE_URL`          | `http://localhost:5173`                       | Base URL used to build shareable public links       |
 | `CORS_ORIGINS`               | `http://localhost:5173`                       | Comma-separated allowed origins                     |
 | `ADMIN_USERNAME`             | `admin`                                       | Administrator username                              |
-| `ADMIN_PASSWORD`             | `admin123` in `.env.example`                  | Administrator password (local demo value)           |
-| `ADMIN_PASSWORD_HASH`        | unset                                         | Optional bcrypt hash; takes precedence over password |
-| `JWT_SECRET`                 | dev-only placeholder                          | Signing secret for admin tokens                     |
+| `ADMIN_PASSWORD`             | none (required unless hash set)               | Plaintext admin password, local development only    |
+| `ADMIN_PASSWORD_HASH`        | none (preferred)                              | bcrypt hash; takes precedence over password         |
+| `JWT_SECRET`                 | none (required, 32+ chars)                    | Signing secret for admin tokens                     |
 | `JWT_ALGORITHM`              | `HS256`                                       | JWT algorithm                                       |
 | `ACCESS_TOKEN_EXPIRE_MINUTES`| `480`                                         | Admin session lifetime                              |
 | `PUBLIC_TOKEN_BYTES`         | `32` (minimum enforced)                       | Random bytes in a public token (32 bytes = 256 bits) |
 | `MONGO_TIMEOUT_MS`           | `3000`                                        | MongoDB server selection timeout                    |
 
-Generate a bcrypt hash if desired:
+Generate the password hash and JWT secret:
 
 ```bash
-python -c "import bcrypt; print(bcrypt.hashpw(b'your-password', bcrypt.gensalt()).decode())"
+python -c "import bcrypt, getpass; print(bcrypt.hashpw(getpass.getpass().encode(), bcrypt.gensalt()).decode())"
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
+
+Put the hash in single quotes in `.env` (`ADMIN_PASSWORD_HASH='$2b$12$...'`).
 
 ### Frontend (`frontend/.env`)
 
-| Variable            | Default                     | Purpose                    |
-| ------------------- | --------------------------- | -------------------------- |
-| `VITE_API_BASE_URL` | `http://localhost:8000/api` | Base URL of the FastAPI API |
+| Variable            | Default | Purpose                                                       |
+| ------------------- | ------- | ------------------------------------------------------------- |
+| `VITE_API_BASE_URL` | empty   | Backend origin **without** `/api`, e.g. `http://localhost:8000` |
 
-Local development origins on any port for `localhost` / `127.0.0.1` are allowed
-by the backend CORS regex in addition to `CORS_ORIGINS`.
+Both the admin client (`src/api.js`) and the faculty form append `/api/...`
+themselves. Leave the variable empty in development: requests then go to
+`/api` on the Vite server, which proxies them to `http://127.0.0.1:8000`
+(see `vite.config.js`), so the backend must run on port 8000. If you set it to
+an absolute URL instead, local development origins on any port for
+`localhost` / `127.0.0.1` are allowed by the backend CORS regex in addition to
+`CORS_ORIGINS`.
 
 ## API contract
 
@@ -175,7 +196,7 @@ by the backend CORS regex in addition to `CORS_ORIGINS`.
 | ------ | --------------------------------- | ----------- | -------------------------------- |
 | POST   | `/api/auth/login`                 | Public      | Obtain an admin bearer token     |
 | GET    | `/api/auth/me`                    | Admin       | Verify the current session       |
-| GET    | `/api/courses`                    | Admin       | List the seeded course catalogue |
+| GET    | `/api/courses?semester=N`         | Admin       | List courses (semester optional) |
 | POST   | `/api/forms`                      | Admin       | Create a draft form              |
 | GET    | `/api/forms`                      | Admin       | List forms with response counts  |
 | GET    | `/api/forms/{id}`                 | Admin       | Load a form for editing          |
@@ -420,5 +441,33 @@ the committed live smoke test covers the same API workflow.
   preview, configure a rewrite/fallback from unknown paths to `index.html` so
   `/forms/:token` and `/admin/*` deep links work.
 - No Excel export, analytics, charts, or advanced filtering are implemented.
-- If MongoDB is unavailable, API routes return safe HTTP 500 responses and the
-  health endpoint still responds; backend tests can still run via mongomock.
+- If MongoDB is unavailable, the backend logs an error at startup, API routes
+  return safe HTTP 500 responses, and `/api/health` reports
+  `"database": "unavailable"`; backend tests can still run via mongomock.
+  Indexes skipped at startup are created on the next restart.
+
+## Integration notes
+
+- **One backend:** `backend/app` is the application. Member 2's separately
+  developed course code (formerly `member2/`, still in git history) now lives in
+  the backend:
+  - `GET /api/courses?semester=N` (`app/routers/courses.py`) has Member 2's
+    semester filter and returns 503 when MongoDB is unreachable.
+  - `CourseResponse` / `CourseListResponse` (`app/schemas.py`) are adapted from
+    `member2/course_schema.py`.
+  - Member 2's eight department courses (`23N301`–`23N504`) are seeded by
+    `python -m app.seed` together with the demo courses.
+- **Course documents** are stored as `{code, name, semester}` and returned as
+  `{course_id, course_code, course_name, semester}`; `course_id` is the `_id`
+  as a string and is what `questions[].course_ids` expects.
+- **Databases seeded by Member 2's original script** (fields `course_code` /
+  `course_name`, unique index `course_code_1`): `python -m app.seed` stops and
+  asks you to run `db.courses.dropIndex('course_code_1')` once; rerunning it
+  then adds `code` / `name` to those records in place without duplicating them.
+- **Faculty form:** `/` and `/forms/:token` render Member 4's
+  `FacultyPreferenceForm`. `src/pages/PublicFormPage.jsx` is kept but not routed.
+- **Admin login** is `POST /api/auth/login` (the original plan said
+  `/api/admin/login`); frontend and backend both use `/api/auth/login`.
+- **Same course in two questions:** the form builder prevents it, the backend
+  accepts such forms, and a faculty response that picks one course twice is
+  rejected with HTTP 422.

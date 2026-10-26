@@ -1,0 +1,72 @@
+/*
+ * Admin pages share the document with the faculty form, whose index.css
+ * styles #root and bare headings for that page. Undo those for admin screens
+ * only. :where() keeps specificity at zero so styles.css classes still win.
+ */
+html:has(.app-shell),
+html:has(.auth-page),
+html:has(.full-page-loading) {
+  font-size: 16px;
+  letter-spacing: normal;
+}
+
+#root:has(.app-shell),
+#root:has(.auth-page),
+#root:has(.full-page-loading) {
+  width: auto;
+  max-width: none;
+  margin: 0;
+  text-align: left;
+  border-inline: 0;
+  display: block;
+}
+
+/* Back to browser defaults, which is what styles.css was written against. */
+:where(.app-shell, .auth-page) :is(h1, h2, h3) {
+  font-family: revert;
+  font-size: revert;
+  font-weight: revert;
+  letter-spacing: revert;
+  line-height: revert;
+  color: revert;
+  margin-bottom: revert;
+}
+
+/* Form builder additions */
+.question-count-input {
+  max-width: 8rem;
+}
+
+.semester-select {
+  max-width: 16rem;
+}
+
+.checkbox-row.taken {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.chip-removable {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.chip-remove {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 0.1rem;
+}
+
+.chip-remove:hover {
+  color: var(--danger);
+}
+
+.issue-list {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+}

@@ -34,25 +34,28 @@ def verify_admin_credentials(username: str, password: str) -> bool:
     """Constant-time comparison of the configured administrator credentials."""
     if not isinstance(username, str) or not isinstance(password, str):
         return False
-    if not hmac.compare_digest(
+    username_ok = hmac.compare_digest(
         username.encode("utf-8"), settings.admin_username.encode("utf-8")
-    ):
-        return False
+    )
 
+    # The password is always checked, so a wrong username takes as long as a
+    # wrong password and does not reveal which one was incorrect.
     if settings.admin_password_hash:
         try:
-            return bcrypt.checkpw(
+            password_ok = bcrypt.checkpw(
                 password.encode("utf-8"),
                 settings.admin_password_hash.encode("utf-8"),
             )
         except (ValueError, TypeError):
-            return False
+            password_ok = False
+    elif settings.admin_password:
+        password_ok = hmac.compare_digest(
+            password.encode("utf-8"), settings.admin_password.encode("utf-8")
+        )
+    else:
+        password_ok = False
 
-    if not settings.admin_password:
-        return False
-    return hmac.compare_digest(
-        password.encode("utf-8"), settings.admin_password.encode("utf-8")
-    )
+    return username_ok and password_ok
 
 
 def create_access_token(
@@ -86,6 +89,7 @@ def get_current_admin(
             credentials.credentials,
             settings.jwt_secret,
             algorithms=[settings.jwt_algorithm],
+            options={"require": ["exp", "sub"]},
         )
     except jwt.ExpiredSignatureError as exc:
         raise _unauthorized("Authentication token has expired.") from exc

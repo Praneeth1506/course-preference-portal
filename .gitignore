@@ -5,3 +5,11 @@ member2/.env
 # Python cache files
 __pycache__/
 *.py[cod]
+
+# Local secrets: only the .env.example files belong in git
+.env
+
+# Python virtual environments and tooling
+.venv/
+venv/
+.pytest_cache/
