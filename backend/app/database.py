@@ -39,6 +39,15 @@ def get_database() -> Database:
     return get_client()[settings.mongo_db_name]
 
 
+def database_is_reachable() -> bool:
+    """Ping MongoDB; used for the startup message and the health check."""
+    try:
+        get_client().admin.command("ping")
+        return True
+    except PyMongoError:
+        return False
+
+
 def ensure_indexes(db: Database | None = None, *, force: bool = False) -> None:
     """Create the indexes used by the application.
 
