@@ -1,6 +1,10 @@
-const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api"
-).replace(/\/+$/, "");
+// VITE_API_BASE_URL is the backend origin without "/api" (the same variable the
+// faculty form uses). Left empty, requests go to "/api" on the Vite dev server,
+// which proxies them to the backend (see vite.config.js).
+const API_BASE_URL = `${(import.meta.env.VITE_API_BASE_URL || "").replace(
+  /\/+$/,
+  "",
+)}/api`;
 
 const TOKEN_KEY = "cpp_admin_token";
 

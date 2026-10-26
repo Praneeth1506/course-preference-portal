@@ -8,6 +8,21 @@ import {
   SharePanel,
   StatusBadge,
 } from "../components";
+import {
+  MAX_QUESTIONS,
+  MIN_QUESTIONS,
+  buildFormPayload,
+  clampQuestionCount,
+  courseAssignments,
+  coursesForSemester,
+  defaultQuestionText,
+  removeCourse,
+  resizeQuestions,
+  semestersFromCourses,
+  setQuestionSemester,
+  toggleCourse,
+  validateBuilder,
+} from "../formBuilderLogic";
 import { publicUrlForForm } from "../utils";
 
 function makeKey() {
@@ -27,6 +42,20 @@ function newQuestion() {
   };
 }
 
+function groupBySemester(courses) {
+  const groups = new Map();
+  for (const course of courses) {
+    const key = course.semester ?? "unknown";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(course);
+  }
+  return [...groups.entries()].sort((first, second) => {
+    if (first[0] === "unknown") return 1;
+    if (second[0] === "unknown") return -1;
+    return first[0] - second[0];
+  });
+}
+
 export default function FormBuilderPage() {
   const { formId } = useParams();
   const navigate = useNavigate();
@@ -35,7 +64,9 @@ export default function FormBuilderPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [questions, setQuestions] = useState(() => [newQuestion()]);
+  const [countInput, setCountInput] = useState("1");
   const [courses, setCourses] = useState([]);
+  const [coursesLoading, setCoursesLoading] = useState(true);
   const [form, setForm] = useState(null);
   const [published, setPublished] = useState(null);
   const [loading, setLoading] = useState(!isNew);
@@ -43,6 +74,9 @@ export default function FormBuilderPage() {
   const [coursesError, setCoursesError] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [questionNotices, setQuestionNotices] = useState({});
+  const [showIssues, setShowIssues] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
 
@@ -55,6 +89,9 @@ export default function FormBuilderPage() {
       })
       .catch((requestError) => {
         if (active) setCoursesError(requestError.message);
+      })
+      .finally(() => {
+        if (active) setCoursesLoading(false);
       });
     return () => {
       active = false;
@@ -77,17 +114,17 @@ export default function FormBuilderPage() {
         setForm(data);
         setTitle(data.title || "");
         setDescription(data.description || "");
-        setQuestions(
-          (data.questions || []).map((question) => ({
-            key: makeKey(),
-            question_id: question.question_id,
-            text: question.text || "",
-            course_ids: Array.isArray(question.course_ids)
-              ? [...question.course_ids]
-              : [],
-            semester: question.semester ?? null,
-          })),
-        );
+        const loaded = (data.questions || []).map((question) => ({
+          key: makeKey(),
+          question_id: question.question_id,
+          text: question.text || "",
+          course_ids: Array.isArray(question.course_ids)
+            ? [...question.course_ids]
+            : [],
+          semester: question.semester ?? null,
+        }));
+        setQuestions(loaded.length > 0 ? loaded : [newQuestion()]);
+        setCountInput(String(Math.max(loaded.length, MIN_QUESTIONS)));
         if (data.status === "published") {
           setPublished({
             form_id: data.form_id,
@@ -115,56 +152,79 @@ export default function FormBuilderPage() {
     };
   }, [formId]);
 
-  const coursesBySemester = useMemo(() => {
-    const groups = new Map();
-    for (const course of courses) {
-      const key = course.semester ?? "unknown";
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(course);
-    }
-    return [...groups.entries()].sort((first, second) => {
-      if (first[0] === "unknown") return 1;
-      if (second[0] === "unknown") return -1;
-      return first[0] - second[0];
-    });
-  }, [courses]);
+  const semesters = useMemo(() => semestersFromCourses(courses), [courses]);
+  const courseById = useMemo(
+    () => new Map(courses.map((course) => [course.course_id, course])),
+    [courses],
+  );
+  const assignments = useMemo(() => courseAssignments(questions), [questions]);
 
-  const canSave =
-    Boolean(title.trim()) && questions.every((question) => question.text.trim());
+  const issues = validateBuilder({
+    title,
+    questions,
+    courses,
+    coursesLoaded: !coursesLoading && !coursesError,
+  });
+  const busy = saving || publishing;
 
-  const canPublish =
-    canSave &&
-    questions.length > 0 &&
-    questions.every((question) => question.course_ids.length > 0);
+  // Always works from the latest questions, so the count box, add/remove and
+  // move buttons can never disagree about how many questions exist.
+  const replaceQuestions = (next) => {
+    setQuestions(next);
+    setCountInput(String(next.length));
+  };
 
-  const buildPayload = () => {
-    const trimmedTitle = title.trim();
-    if (!trimmedTitle) {
-      throw new Error("Form title is required.");
-    }
+  const handleCountChange = (value) => {
+    setCountInput(value);
+    if (value === "") return;
+    const target = clampQuestionCount(value);
+    const removed = questions
+      .slice(target)
+      .reduce((total, question) => total + question.course_ids.length, 0);
+    setQuestions(resizeQuestions(questions, target, newQuestion));
+    setNotice(
+      removed > 0
+        ? `Removed ${questions.length - target} question(s) and their ${removed} course selection(s).`
+        : "",
+    );
+  };
 
-    const payloadQuestions = questions.map((question, index) => {
-      const text = question.text.trim();
-      if (!text) {
-        throw new Error(`Question ${index + 1} needs text.`);
-      }
-      return {
-        question_id: question.question_id || undefined,
-        text,
-        course_ids: question.course_ids,
-        semester: question.semester ?? null,
-      };
-    });
+  const handleCountBlur = () => {
+    setCountInput(String(questions.length));
+  };
 
-    return {
-      title: trimmedTitle,
-      description: description.trim() || null,
-      questions: payloadQuestions,
-    };
+  const updateQuestion = (index, changes) => {
+    setQuestions((current) =>
+      current.map((question, questionIndex) =>
+        questionIndex === index ? { ...question, ...changes } : question,
+      ),
+    );
+  };
+
+  const handleSemesterChange = (index, value) => {
+    const semester = value === "" ? null : Number(value);
+    const result = setQuestionSemester(questions, index, semester, courses);
+    setQuestions(result.questions);
+    const key = questions[index].key;
+    setQuestionNotices((current) => ({
+      ...current,
+      [key]:
+        result.removedCount > 0
+          ? `Removed ${result.removedCount} selected course(s) that are not in Semester ${semester}.`
+          : "",
+    }));
+  };
+
+  const moveQuestion = (index, direction) => {
+    const target = index + direction;
+    if (target < 0 || target >= questions.length) return;
+    const next = [...questions];
+    [next[index], next[target]] = [next[target], next[index]];
+    replaceQuestions(next);
   };
 
   const persist = async ({ redirectIfNew = true } = {}) => {
-    const payload = buildPayload();
+    const payload = buildFormPayload({ title, description, questions });
     const saved = formId
       ? await api.updateForm(formId, payload)
       : await api.createForm(payload);
@@ -175,9 +235,21 @@ export default function FormBuilderPage() {
     return saved;
   };
 
-  const handleSave = async () => {
+  // Returns false (and shows the issue list) when the form is not ready to send.
+  const checkReady = () => {
     setError("");
     setNotice("");
+    setQuestionNotices({});
+    if (issues.length > 0) {
+      setShowIssues(true);
+      return false;
+    }
+    setShowIssues(false);
+    return true;
+  };
+
+  const handleSave = async () => {
+    if (busy || !checkReady()) return;
     setSaving(true);
     try {
       await persist();
@@ -190,8 +262,7 @@ export default function FormBuilderPage() {
   };
 
   const handlePublish = async () => {
-    setError("");
-    setNotice("");
+    if (busy || !checkReady()) return;
     setPublishing(true);
     try {
       const saved = await persist({ redirectIfNew: false });
@@ -207,39 +278,6 @@ export default function FormBuilderPage() {
     } finally {
       setPublishing(false);
     }
-  };
-
-  const updateQuestion = (index, changes) => {
-    setQuestions((current) =>
-      current.map((question, questionIndex) =>
-        questionIndex === index ? { ...question, ...changes } : question,
-      ),
-    );
-  };
-
-  const toggleCourse = (index, courseId) => {
-    setQuestions((current) =>
-      current.map((question, questionIndex) => {
-        if (questionIndex !== index) return question;
-        const selected = question.course_ids.includes(courseId);
-        return {
-          ...question,
-          course_ids: selected
-            ? question.course_ids.filter((id) => id !== courseId)
-            : [...question.course_ids, courseId],
-        };
-      }),
-    );
-  };
-
-  const moveQuestion = (index, direction) => {
-    setQuestions((current) => {
-      const target = index + direction;
-      if (target < 0 || target >= current.length) return current;
-      const next = [...current];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
   };
 
   if (loading) {
@@ -332,6 +370,115 @@ export default function FormBuilderPage() {
     );
   }
 
+
+  const actionBar = (
+    <div className="sticky-actions">
+      <div className="sticky-actions-inner">
+        <p className="muted small">
+          {issues.length === 0
+            ? "Ready to save or publish."
+            : `${issues.length} item(s) need attention before saving.`}
+        </p>
+        <div className="actions">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setPreviewing((current) => !current)}
+            disabled={busy}
+          >
+            {previewing ? "Back to editing" : "Preview"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={handleSave}
+            disabled={busy}
+          >
+            {saving ? "Saving…" : "Save draft"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handlePublish}
+            disabled={busy}
+          >
+            {publishing ? "Publishing…" : "Publish form"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const issueList =
+    showIssues && issues.length > 0 ? (
+      <div className="alert alert-error" role="alert">
+        <strong>Fix these before saving:</strong>
+        <ul className="issue-list">
+          {issues.map((issue) => (
+            <li key={issue}>{issue}</li>
+          ))}
+        </ul>
+      </div>
+    ) : null;
+
+  const courseLabel = (courseId) => {
+    const course = courseById.get(courseId);
+    return course
+      ? `${course.course_code} · ${course.course_name}`
+      : "Unknown course";
+  };
+
+  if (previewing) {
+    return (
+      <div>
+        <div className="page-header">
+          <div>
+            <p className="muted small">Preview — not saved yet</p>
+            <h1 className="page-title">{title.trim() || "Untitled form"}</h1>
+            {description.trim() ? (
+              <p className="muted">{description.trim()}</p>
+            ) : null}
+          </div>
+          <StatusBadge status="draft" />
+        </div>
+
+        <ErrorBanner error={error} />
+        <Notice>{notice}</Notice>
+        {issueList}
+
+        <section className="published-questions">
+          {questions.map((question, index) => (
+            <article className="card question-card" key={question.key}>
+              <div className="question-head">
+                <span className="question-number">{index + 1}</span>
+                <div>
+                  <h3>{question.text.trim() || defaultQuestionText(index)}</h3>
+                  <p className="muted small">
+                    {question.semester
+                      ? `Semester ${question.semester} courses`
+                      : "Courses from any semester"}
+                  </p>
+                </div>
+              </div>
+              <div className="course-chips">
+                {question.course_ids.map((courseId) => (
+                  <span className="chip" key={courseId}>
+                    {courseLabel(courseId)}
+                  </span>
+                ))}
+                {question.course_ids.length === 0 ? (
+                  <span className="muted small">No courses selected.</span>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </section>
+
+        {actionBar}
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -343,7 +490,8 @@ export default function FormBuilderPage() {
             {isNew ? "New form" : "Edit draft form"}
           </h1>
           <p className="muted">
-            Add questions, choose the courses faculty can pick, then publish.
+            Set the number of questions, choose the courses faculty can pick
+            for each, preview, then save or publish.
           </p>
         </div>
         <StatusBadge status="draft" />
@@ -351,7 +499,10 @@ export default function FormBuilderPage() {
 
       <ErrorBanner error={error} />
       <Notice>{notice}</Notice>
-      <ErrorBanner error={coursesError} />
+      {issueList}
+      <ErrorBanner
+        error={coursesError && `Courses could not be loaded: ${coursesError}`}
+      />
 
       <section className="card form-details">
         <div className="field">
@@ -379,6 +530,23 @@ export default function FormBuilderPage() {
             rows={3}
           />
         </div>
+        <div className="field question-count-field">
+          <label htmlFor="question-count">Number of preference questions</label>
+          <input
+            id="question-count"
+            className="input question-count-input"
+            type="number"
+            min={MIN_QUESTIONS}
+            max={MAX_QUESTIONS}
+            value={countInput}
+            onChange={(event) => handleCountChange(event.target.value)}
+            onBlur={handleCountBlur}
+          />
+          <p className="muted small">
+            Between {MIN_QUESTIONS} and {MAX_QUESTIONS}. Lowering the number
+            removes the last questions and their course selections.
+          </p>
+        </div>
       </section>
 
       <div className="section-heading">
@@ -386,165 +554,221 @@ export default function FormBuilderPage() {
         <button
           type="button"
           className="btn btn-secondary"
-          onClick={() => setQuestions((current) => [...current, newQuestion()])}
+          onClick={() => replaceQuestions([...questions, newQuestion()])}
+          disabled={questions.length >= MAX_QUESTIONS}
         >
           + Add question
         </button>
       </div>
 
-      {questions.length === 0 ? (
-        <div className="empty-state card">
-          <p className="muted">
-            Add at least one question before publishing this form.
-          </p>
-        </div>
-      ) : null}
-
       <div className="questions-editor">
-        {questions.map((question, index) => (
-          <article className="card question-card" key={question.key}>
-            <div className="question-head">
-              <span className="question-number">{index + 1}</span>
-              <div className="question-head-main">
-                <div className="field">
-                  <label htmlFor={`question-${question.key}`}>
-                    Question text
-                  </label>
-                  <input
-                    id={`question-${question.key}`}
-                    className="input"
-                    value={question.text}
-                    maxLength={500}
-                    onChange={(event) =>
-                      updateQuestion(index, { text: event.target.value })
+        {questions.map((question, index) => {
+          const available = coursesForSemester(courses, question.semester);
+          return (
+            <article className="card question-card" key={question.key}>
+              <div className="question-head">
+                <span className="question-number">{index + 1}</span>
+                <div className="question-head-main">
+                  <div className="field">
+                    <label htmlFor={`question-${question.key}`}>
+                      Question text <span className="muted">(optional)</span>
+                    </label>
+                    <input
+                      id={`question-${question.key}`}
+                      className="input"
+                      value={question.text}
+                      maxLength={500}
+                      onChange={(event) =>
+                        updateQuestion(index, { text: event.target.value })
+                      }
+                      placeholder={defaultQuestionText(index)}
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`semester-${question.key}`}>
+                      Semester
+                    </label>
+                    <select
+                      id={`semester-${question.key}`}
+                      className="input semester-select"
+                      value={question.semester ?? ""}
+                      onChange={(event) =>
+                        handleSemesterChange(index, event.target.value)
+                      }
+                      disabled={coursesLoading || Boolean(coursesError)}
+                    >
+                      <option value="">All semesters</option>
+                      {semesters.map((semester) => (
+                        <option key={semester} value={semester}>
+                          Semester {semester}
+                        </option>
+                      ))}
+                      {question.semester !== null &&
+                      !semesters.includes(question.semester) ? (
+                        <option value={question.semester}>
+                          Semester {question.semester}
+                        </option>
+                      ) : null}
+                    </select>
+                  </div>
+                </div>
+                <div className="question-controls">
+                  <button
+                    type="button"
+                    className="btn btn-icon"
+                    onClick={() => moveQuestion(index, -1)}
+                    disabled={index === 0}
+                    aria-label="Move question up"
+                    title="Move up"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-icon"
+                    onClick={() => moveQuestion(index, 1)}
+                    disabled={index === questions.length - 1}
+                    aria-label="Move question down"
+                    title="Move down"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-icon btn-danger-quiet"
+                    onClick={() =>
+                      replaceQuestions(
+                        questions.filter(
+                          (_, questionIndex) => questionIndex !== index,
+                        ),
+                      )
                     }
-                    placeholder="e.g. Preferred course for Semester 3 teaching"
-                  />
+                    disabled={questions.length <= MIN_QUESTIONS}
+                    aria-label="Remove question"
+                    title="Remove question"
+                  >
+                    ×
+                  </button>
                 </div>
               </div>
-              <div className="question-controls">
-                <button
-                  type="button"
-                  className="btn btn-icon"
-                  onClick={() => moveQuestion(index, -1)}
-                  disabled={index === 0}
-                  aria-label="Move question up"
-                  title="Move up"
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-icon"
-                  onClick={() => moveQuestion(index, 1)}
-                  disabled={index === questions.length - 1}
-                  aria-label="Move question down"
-                  title="Move down"
-                >
-                  ↓
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-icon btn-danger-quiet"
-                  onClick={() =>
-                    setQuestions((current) =>
-                      current.filter(
-                        (_, questionIndex) => questionIndex !== index,
-                      ),
-                    )
-                  }
-                  aria-label="Remove question"
-                  title="Remove question"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
 
-            <div className="field">
-              <span className="field-label">
-                Allowed courses{" "}
-                <span className="muted">
-                  ({question.course_ids.length} selected)
+              <Notice>{questionNotices[question.key]}</Notice>
+
+              <div className="field">
+                <span className="field-label">
+                  Selected courses{" "}
+                  <span className="muted">
+                    ({question.course_ids.length})
+                  </span>
                 </span>
-              </span>
-              {courses.length === 0 && !coursesError ? (
-                <p className="muted small">Loading courses…</p>
-              ) : null}
-              {courses.length === 0 && coursesError ? (
-                <p className="muted small">
-                  Courses could not be loaded. Run the backend seed script and
-                  refresh.
-                </p>
-              ) : null}
-              <div className="course-picker">
-                {coursesBySemester.map(([semester, semesterCourses]) => (
-                  <div className="course-group" key={semester}>
-                    <p className="course-group-title">
-                      {semester === "unknown"
-                        ? "Other courses"
-                        : `Semester ${semester}`}
-                    </p>
-                    <div className="course-options">
-                      {semesterCourses.map((course) => {
-                        const checked = question.course_ids.includes(
-                          course.course_id,
-                        );
-                        return (
-                          <label
-                            className={`checkbox-row ${checked ? "checked" : ""}`}
-                            key={course.course_id}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() =>
-                                toggleCourse(index, course.course_id)
-                              }
-                            />
-                            <span>
-                              <strong>{course.course_code}</strong>{" "}
-                              {course.course_name}
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
+                <div className="course-chips">
+                  {question.course_ids.map((courseId) => (
+                    <span className="chip chip-removable" key={courseId}>
+                      {courseLabel(courseId)}
+                      <button
+                        type="button"
+                        className="chip-remove"
+                        onClick={() =>
+                          setQuestions(removeCourse(questions, index, courseId))
+                        }
+                        aria-label={`Remove ${courseLabel(courseId)}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  {question.course_ids.length === 0 ? (
+                    <span className="muted small">
+                      None yet. Pick at least one course below.
+                    </span>
+                  ) : null}
+                </div>
               </div>
-            </div>
-          </article>
-        ))}
+
+              <div className="field">
+                <span className="field-label">Available courses</span>
+                {coursesLoading ? <Loading label="Loading courses…" /> : null}
+                {!coursesLoading && coursesError ? (
+                  <p className="muted small">
+                    Courses are unavailable. Check that the backend is running,
+                    then refresh the page.
+                  </p>
+                ) : null}
+                {!coursesLoading && !coursesError && courses.length === 0 ? (
+                  <p className="muted small">
+                    The course catalogue is empty. Seed it with{" "}
+                    <code>python -m app.seed</code> in the backend.
+                  </p>
+                ) : null}
+                {!coursesLoading &&
+                courses.length > 0 &&
+                available.length === 0 ? (
+                  <p className="muted small">
+                    No courses are available for Semester {question.semester}.
+                    Choose another semester.
+                  </p>
+                ) : null}
+                <div className="course-picker">
+                  {groupBySemester(available).map(
+                    ([semester, semesterCourses]) => (
+                      <div className="course-group" key={semester}>
+                        <p className="course-group-title">
+                          {semester === "unknown"
+                            ? "Other courses"
+                            : `Semester ${semester}`}
+                        </p>
+                        <div className="course-options">
+                          {semesterCourses.map((course) => {
+                            const checked = question.course_ids.includes(
+                              course.course_id,
+                            );
+                            const owner = assignments.get(course.course_id);
+                            const takenElsewhere =
+                              owner !== undefined && owner !== index;
+                            return (
+                              <label
+                                className={`checkbox-row ${checked ? "checked" : ""} ${takenElsewhere ? "taken" : ""}`}
+                                key={course.course_id}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={takenElsewhere}
+                                  onChange={() =>
+                                    setQuestions(
+                                      toggleCourse(
+                                        questions,
+                                        index,
+                                        course.course_id,
+                                      ),
+                                    )
+                                  }
+                                />
+                                <span>
+                                  <strong>{course.course_code}</strong>{" "}
+                                  {course.course_name}
+                                  {takenElsewhere ? (
+                                    <span className="muted small">
+                                      {" "}
+                                      — used in Question {owner + 1}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ),
+                  )}
+                </div>
+              </div>
+            </article>
+          );
+        })}
       </div>
 
-      <div className="sticky-actions">
-        <div className="sticky-actions-inner">
-          <p className="muted small">
-            {canPublish
-              ? "Ready to publish."
-              : "To publish, add a title and ensure every question has text and at least one course."}
-          </p>
-          <div className="actions">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={handleSave}
-              disabled={!canSave || saving || publishing}
-            >
-              {saving ? "Saving…" : "Save draft"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handlePublish}
-              disabled={!canPublish || saving || publishing}
-            >
-              {publishing ? "Publishing…" : "Publish form"}
-            </button>
-          </div>
-        </div>
-      </div>
+      {actionBar}
     </div>
   );
 }
