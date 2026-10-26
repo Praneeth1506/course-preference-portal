@@ -150,3 +150,31 @@ class PublishResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class CourseResponse(BaseModel):
+    """A course as returned by GET /api/courses (adapted from member2/course_schema.py).
+
+    ``course_id`` is the MongoDB ``_id`` as a 24-character hex string; it is the
+    value the form builder sends back in ``questions[].course_ids``.
+    """
+
+    course_id: str
+    course_code: str
+    course_name: str
+    semester: int | None = None
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "course_id": "6711c0ffee0000000000abcd",
+                "course_code": "23N501",
+                "course_name": "Machine Learning",
+                "semester": 5,
+            }
+        }
+    )
+
+
+class CourseListResponse(BaseModel):
+    courses: list[CourseResponse]
