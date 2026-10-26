@@ -21,6 +21,31 @@ export function getApiBaseUrl() {
 }
 
 /**
+ * Extracts a readable message from an error payload. FastAPI sends `detail` as a
+ * string, or as a list of { loc, msg } objects for request validation errors.
+ *
+ * @param {any} data
+ * @returns {string|null}
+ */
+export function errorDetailMessage(data) {
+  if (!data || typeof data !== 'object') return null;
+  const { detail } = data;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (!item || typeof item.msg !== 'string') return null;
+        const field = Array.isArray(item.loc) ? item.loc[item.loc.length - 1] : '';
+        return field && typeof field === 'string' ? `${field}: ${item.msg}` : item.msg;
+      })
+      .filter(Boolean);
+    return messages.length > 0 ? messages.join('; ') : null;
+  }
+  const value = detail || data.message || data.error;
+  return typeof value === 'string' ? value : null;
+}
+
+/**
  * Custom error class for API failures containing HTTP status and server error payload.
  */
 export class ApiError extends Error {
@@ -94,7 +119,7 @@ export async function fetchPublicForm(token, options = {}) {
 
   if (!response.ok) {
     const errorMsg =
-      (data && typeof data === 'object' && (data.detail || data.message || data.error)) ||
+      errorDetailMessage(data) ||
       `Server responded with HTTP ${response.status}`;
     throw new ApiError(String(errorMsg), response.status, data);
   }
@@ -166,7 +191,7 @@ export async function submitFacultyResponse(token, payload, options = {}) {
 
   if (!response.ok) {
     const errorMsg =
-      (data && typeof data === 'object' && (data.detail || data.message || data.error)) ||
+      errorDetailMessage(data) ||
       `Submission failed with HTTP ${response.status}`;
     throw new ApiError(String(errorMsg), response.status, data);
   }

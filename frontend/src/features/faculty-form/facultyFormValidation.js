@@ -141,6 +141,8 @@ export function validateFormData(rawForm) {
 
     const qTitle = typeof q.title === 'string'
       ? q.title.trim()
+      : typeof q.text === 'string' && q.text.trim()
+      ? q.text.trim()
       : typeof q.prompt === 'string'
       ? q.prompt.trim()
       : typeof q.label === 'string'
@@ -178,10 +180,12 @@ export function validateFormData(rawForm) {
       }
       seenCourseIds.add(stableCId);
 
+      // The backend sends course_code / course_name (GET /api/public/forms/{token}).
+      const rawCode = c.code ?? c.course_code;
       normalizedCourses.push({
         id: stableCId,
-        code: c.code ? String(c.code).trim() : '',
-        name: c.name || c.title || stableCId,
+        code: rawCode ? String(rawCode).trim() : '',
+        name: c.name || c.course_name || c.title || stableCId,
         department: c.department || '',
       });
     }

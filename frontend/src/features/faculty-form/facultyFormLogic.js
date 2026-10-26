@@ -20,7 +20,7 @@ import {
   isCourseDisabledForQuestion,
   getSelectedCoursesElsewhere,
 } from './facultyFormValidation.js';
-import { submitFacultyResponse } from './facultyFormApi.js';
+import { errorDetailMessage, submitFacultyResponse } from './facultyFormApi.js';
 
 /**
  * Submission lifecycle statuses
@@ -147,7 +147,7 @@ export function mapHttpError(status, errorData = null) {
   let isRetryable = true;
 
   const serverMsg =
-    (errorData && typeof errorData === 'object' && (errorData.detail || errorData.message || errorData.error)) ||
+    errorDetailMessage(errorData) ||
     (typeof errorData === 'string' && !errorData.startsWith('Submission failed with HTTP') ? errorData : null);
 
   switch (status) {
