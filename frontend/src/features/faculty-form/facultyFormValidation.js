@@ -182,13 +182,34 @@ export function validateFormData(rawForm) {
 
       // The backend sends course_code / course_name (GET /api/public/forms/{token}).
       const rawCode = c.code ?? c.course_code;
+      const cSemester =
+        c.semester !== undefined && c.semester !== null && c.semester !== ''
+          ? Number(c.semester)
+          : null;
+
+      const qSemester =
+        q.semester !== undefined && q.semester !== null && q.semester !== ''
+          ? Number(q.semester)
+          : null;
+
+      // Filter out courses that do not belong to the question's configured semester
+      if (qSemester !== null && cSemester !== null && cSemester !== qSemester) {
+        continue;
+      }
+
       normalizedCourses.push({
         id: stableCId,
         code: rawCode ? String(rawCode).trim() : '',
         name: c.name || c.course_name || c.title || stableCId,
         department: c.department || '',
+        semester: cSemester,
       });
     }
+
+    const qSemester =
+      q.semester !== undefined && q.semester !== null && q.semester !== ''
+        ? Number(q.semester)
+        : null;
 
     const hasNoCourses = normalizedCourses.length === 0;
     if (hasNoCourses) {
@@ -199,6 +220,7 @@ export function validateFormData(rawForm) {
       id: stableQId,
       title: qTitle,
       order: typeof q.order === 'number' ? q.order : index,
+      semester: qSemester,
       courses: normalizedCourses,
       hasNoCourses,
     });
