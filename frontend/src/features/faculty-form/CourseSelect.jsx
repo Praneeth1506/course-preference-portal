@@ -46,7 +46,8 @@ export function CourseSelect({
         <option value="">-- Choose a course preference --</option>
         {courses.map((course) => {
           const codePrefix = course.code ? `[${course.code}] ` : '';
-          const deptSuffix = course.department ? ` (${course.department})` : '';
+          const semSuffix = course.semester ? ` (Sem ${course.semester})` : '';
+          const deptSuffix = !semSuffix && course.department ? ` (${course.department})` : '';
           const disabledNotice = course.isDisabled ? ' — (Already selected for another preference)' : '';
 
           return (
@@ -55,7 +56,7 @@ export function CourseSelect({
               value={course.id}
               disabled={course.isDisabled}
             >
-              {codePrefix}{course.name}{deptSuffix}{disabledNotice}
+              {codePrefix}{course.name}{semSuffix}{deptSuffix}{disabledNotice}
             </option>
           );
         })}

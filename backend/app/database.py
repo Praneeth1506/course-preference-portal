@@ -26,11 +26,26 @@ def get_client() -> MongoClient:
     """Return the process-wide MongoDB client, creating it on first use."""
     global _client
     if _client is None:
-        _client = MongoClient(
-            settings.mongo_uri,
-            serverSelectionTimeoutMS=settings.mongo_timeout_ms,
-            tz_aware=True,
-        )
+        if settings.mongo_uri.startswith("mongomock://"):
+            import mongomock
+            _client = mongomock.MongoClient()
+        else:
+            try:
+                candidate = MongoClient(
+                    settings.mongo_uri,
+                    serverSelectionTimeoutMS=settings.mongo_timeout_ms,
+                    tz_aware=True,
+                )
+                candidate.admin.command("ping")
+                _client = candidate
+            except Exception as exc:
+                logger.warning(
+                    "MongoDB at %s is unreachable (%s). Falling back to in-memory mongomock for local development.",
+                    settings.mongo_uri,
+                    exc,
+                )
+                import mongomock
+                _client = mongomock.MongoClient()
     return _client
 
 
@@ -44,7 +59,7 @@ def database_is_reachable() -> bool:
     try:
         get_client().admin.command("ping")
         return True
-    except PyMongoError:
+    except Exception:
         return False
 
 

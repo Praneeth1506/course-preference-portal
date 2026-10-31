@@ -25,7 +25,19 @@ export function resizeQuestions(questions, count, createQuestion) {
   return [...questions, ...added];
 }
 
-/** Map of course_id -> index of the first question that uses it. */
+/** Add one new preference question up to MAX_QUESTIONS. */
+export function addQuestion(questions, createQuestion) {
+  if (questions.length >= MAX_QUESTIONS) return questions;
+  return [...questions, createQuestion()];
+}
+
+/** Remove a preference question by index, down to MIN_QUESTIONS. */
+export function removeQuestion(questions, index) {
+  if (questions.length <= MIN_QUESTIONS) return questions;
+  return questions.filter((_, qIdx) => qIdx !== index);
+}
+
+/** Map of course_id -> index of the first question that uses it (informational helper). */
 export function courseAssignments(questions) {
   const assigned = new Map();
   questions.forEach((question, index) => {
@@ -36,11 +48,8 @@ export function courseAssignments(questions) {
   return assigned;
 }
 
-/** Select or unselect a course; a course already used by another question is left alone. */
+/** Select or unselect a course for a specific question. Courses can be offered in multiple questions. */
 export function toggleCourse(questions, index, courseId) {
-  const owner = courseAssignments(questions).get(courseId);
-  if (owner !== undefined && owner !== index) return questions;
-
   return questions.map((question, questionIndex) => {
     if (questionIndex !== index) return question;
     const selected = question.course_ids.includes(courseId);
@@ -64,8 +73,27 @@ export function removeCourse(questions, index, courseId) {
   );
 }
 
+/** Select all courses matching this question's semester (or all courses if All Semesters). */
+export function selectAllEligibleCourses(questions, index, courses) {
+  return questions.map((question, questionIndex) => {
+    if (questionIndex !== index) return question;
+    const eligible = coursesForSemester(courses, question.semester).map((c) => c.course_id);
+    return {
+      ...question,
+      course_ids: eligible,
+    };
+  });
+}
+
+/** Clear all course selections for a question. */
+export function clearQuestionCourses(questions, index) {
+  return questions.map((question, questionIndex) =>
+    questionIndex === index ? { ...question, course_ids: [] } : question,
+  );
+}
+
 export function coursesForSemester(courses, semester) {
-  if (semester === null || semester === undefined) return courses;
+  if (semester === null || semester === undefined || semester === "") return courses;
   return courses.filter((course) => course.semester === semester);
 }
 
@@ -82,8 +110,13 @@ export function semestersFromCourses(courses) {
  * from other semesters are dropped so they cannot be submitted by accident.
  */
 export function setQuestionSemester(questions, index, semester, courses) {
+  const normalizedSemester =
+    semester === null || semester === undefined || semester === ""
+      ? null
+      : Number(semester);
+
   const allowed = new Set(
-    coursesForSemester(courses, semester).map((course) => course.course_id),
+    coursesForSemester(courses, normalizedSemester).map((course) => course.course_id),
   );
   let removedCount = 0;
 
@@ -91,7 +124,7 @@ export function setQuestionSemester(questions, index, semester, courses) {
     if (questionIndex !== index) return question;
     const kept = question.course_ids.filter((id) => allowed.has(id));
     removedCount = question.course_ids.length - kept.length;
-    return { ...question, semester, course_ids: kept };
+    return { ...question, semester: normalizedSemester, course_ids: kept };
   });
 
   return { questions: next, removedCount };
@@ -111,7 +144,6 @@ export function validateBuilder({ title, questions, courses, coursesLoaded }) {
   if (questions.length < MIN_QUESTIONS) errors.push("Add at least one question.");
 
   const courseById = new Map(courses.map((course) => [course.course_id, course]));
-  const seen = new Map();
 
   questions.forEach((question, index) => {
     const label = `Question ${index + 1}`;
@@ -119,16 +151,9 @@ export function validateBuilder({ title, questions, courses, coursesLoaded }) {
       errors.push(`${label}: select at least one course.`);
     }
 
-    for (const courseId of question.course_ids) {
-      if (seen.has(courseId)) {
-        errors.push(
-          `${label}: a course is also used in Question ${seen.get(courseId) + 1}. Each course can appear in only one question.`,
-        );
-      } else {
-        seen.set(courseId, index);
-      }
+    if (!coursesLoaded) return;
 
-      if (!coursesLoaded) continue;
+    for (const courseId of question.course_ids) {
       const course = courseById.get(courseId);
       if (!course) {
         errors.push(`${label}: remove a course that is no longer in the catalogue.`);
