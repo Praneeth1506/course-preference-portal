@@ -461,3 +461,80 @@ describe('Central Form Submission Validation', () => {
     assert.deepEqual(result.unavailableQuestions, ['q2']);
   });
 });
+
+describe('Semester-Based Filtering and Dynamic Questions in Form Data', () => {
+  it('normalizes semester field and filters out mismatching courses for single-semester questions', () => {
+    const rawForm = {
+      token: 'tok-sem-filter',
+      title: 'Spring Form',
+      questions: [
+        {
+          id: 'q1',
+          title: 'Preference 1 - Semester 3',
+          semester: 3,
+          courses: [
+            { id: 'c-ds', name: 'Data Structures', semester: 3 },
+            { id: 'c-dbms', name: 'DBMS', semester: 3 },
+            { id: 'c-os', name: 'Operating Systems', semester: 4 }, // mismatch
+          ],
+        },
+      ],
+    };
+
+    const result = validateFormData(rawForm);
+    assert.equal(result.isValid, true);
+    const q1 = result.normalizedForm.questions[0];
+    assert.equal(q1.semester, 3);
+    assert.equal(q1.courses.length, 2);
+    assert.deepEqual(
+      q1.courses.map((c) => c.id),
+      ['c-ds', 'c-dbms'],
+    );
+  });
+
+  it('keeps all courses when All Semesters (semester null) is configured', () => {
+    const rawForm = {
+      token: 'tok-all-sem',
+      title: 'All Semesters Form',
+      questions: [
+        {
+          id: 'q1',
+          title: 'Preference 1 - All Semesters',
+          semester: null,
+          courses: [
+            { id: 'c-ds', name: 'Data Structures', semester: 3 },
+            { id: 'c-os', name: 'Operating Systems', semester: 4 },
+            { id: 'c-ai', name: 'Artificial Intelligence', semester: 5 },
+          ],
+        },
+      ],
+    };
+
+    const result = validateFormData(rawForm);
+    assert.equal(result.isValid, true);
+    const q1 = result.normalizedForm.questions[0];
+    assert.equal(q1.semester, null);
+    assert.equal(q1.courses.length, 3);
+  });
+
+  it('supports dynamic question counts with different semester configurations', () => {
+    const rawForm = {
+      token: 'tok-dynamic-4',
+      title: 'Four Preferences',
+      questions: [
+        { id: 'q1', title: 'Preference 1', semester: 3, courses: [{ id: 'c1', name: 'DS', semester: 3 }] },
+        { id: 'q2', title: 'Preference 2', semester: 3, courses: [{ id: 'c1', name: 'DS', semester: 3 }, { id: 'c2', name: 'DBMS', semester: 3 }] },
+        { id: 'q3', title: 'Preference 3', semester: 4, courses: [{ id: 'c3', name: 'OS', semester: 4 }] },
+        { id: 'q4', title: 'Preference 4', semester: null, courses: [{ id: 'c4', name: 'AI', semester: 5 }] },
+      ],
+    };
+
+    const result = validateFormData(rawForm);
+    assert.equal(result.isValid, true);
+    assert.equal(result.normalizedForm.questions.length, 4);
+    assert.equal(result.normalizedForm.questions[0].semester, 3);
+    assert.equal(result.normalizedForm.questions[1].semester, 3);
+    assert.equal(result.normalizedForm.questions[2].semester, 4);
+    assert.equal(result.normalizedForm.questions[3].semester, null);
+  });
+});

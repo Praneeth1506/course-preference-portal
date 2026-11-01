@@ -605,3 +605,97 @@ describe('API Client Functions', () => {
     assert.equal(res.success, true);
   });
 });
+
+describe('Semester Availability and Dynamic Questions in Faculty Form Logic', () => {
+  const dynamicForm = {
+    token: 'tok-dyn-multi',
+    title: 'Dynamic Multi-Semester Form',
+    questions: [
+      {
+        id: 'q1',
+        title: 'Preference 1 (Semester 3)',
+        order: 1,
+        semester: 3,
+        courses: [
+          { id: 'c-ds', code: 'CS201', name: 'Data Structures', semester: 3 },
+          { id: 'c-dbms', code: 'CS202', name: 'DBMS', semester: 3 },
+        ],
+      },
+      {
+        id: 'q2',
+        title: 'Preference 2 (Semester 3)',
+        order: 2,
+        semester: 3,
+        courses: [
+          { id: 'c-ds', code: 'CS201', name: 'Data Structures', semester: 3 },
+          { id: 'c-dbms', code: 'CS202', name: 'DBMS', semester: 3 },
+        ],
+      },
+      {
+        id: 'q3',
+        title: 'Preference 3 (Semester 4)',
+        order: 3,
+        semester: 4,
+        courses: [
+          { id: 'c-os', code: 'CS301', name: 'Operating Systems', semester: 4 },
+          { id: 'c-cn', code: 'CS302', name: 'Computer Networks', semester: 4 },
+        ],
+      },
+      {
+        id: 'q4',
+        title: 'Preference 4 (All Semesters)',
+        order: 4,
+        semester: null,
+        courses: [
+          { id: 'c-ds', code: 'CS201', name: 'Data Structures', semester: 3 },
+          { id: 'c-dbms', code: 'CS202', name: 'DBMS', semester: 3 },
+          { id: 'c-os', code: 'CS301', name: 'Operating Systems', semester: 4 },
+          { id: 'c-cn', code: 'CS302', name: 'Computer Networks', semester: 4 },
+          { id: 'c-ai', code: 'CS401', name: 'AI', semester: 5 },
+        ],
+      },
+    ],
+  };
+
+  it('correctly disables selected course in other questions regardless of semester setting', () => {
+    // Initial: no selections
+    const initialSelections = { q1: null, q2: null, q3: null, q4: null };
+
+    // Select Data Structures (c-ds) in Q1
+    const { selections } = selectCourse(initialSelections, 'q1', 'c-ds', dynamicForm);
+
+    // In Q1, c-ds is selected and NOT disabled
+    const q1Avail = getCourseAvailabilityForQuestion(dynamicForm.questions[0], selections);
+    const q1Ds = q1Avail.find((c) => c.id === 'c-ds');
+    assert.equal(q1Ds.isSelected, true);
+    assert.equal(q1Ds.isDisabled, false);
+
+    // In Q2 (same semester 3), c-ds is disabled with clear reason
+    const q2Avail = getCourseAvailabilityForQuestion(dynamicForm.questions[1], selections);
+    const q2Ds = q2Avail.find((c) => c.id === 'c-ds');
+    assert.equal(q2Ds.isSelected, false);
+    assert.equal(q2Ds.isDisabled, true);
+    assert.equal(q2Ds.disabledReason, 'Already selected for another preference');
+
+    // In Q4 (All Semesters), c-ds is ALSO disabled with clear reason
+    const q4Avail = getCourseAvailabilityForQuestion(dynamicForm.questions[3], selections);
+    const q4Ds = q4Avail.find((c) => c.id === 'c-ds');
+    assert.equal(q4Ds.isSelected, false);
+    assert.equal(q4Ds.isDisabled, true);
+    assert.equal(q4Ds.disabledReason, 'Already selected for another preference');
+
+    // Other eligible courses in Q2 and Q4 remain enabled
+    const q2Dbms = q2Avail.find((c) => c.id === 'c-dbms');
+    assert.equal(q2Dbms.isDisabled, false);
+    const q4Ai = q4Avail.find((c) => c.id === 'c-ai');
+    assert.equal(q4Ai.isDisabled, false);
+
+    // Clearing Q1 immediately re-enables c-ds in Q2 and Q4
+    const cleared = clearSelection(selections, 'q1');
+    const q2AvailAfterClear = getCourseAvailabilityForQuestion(dynamicForm.questions[1], cleared.selections);
+    const q4AvailAfterClear = getCourseAvailabilityForQuestion(dynamicForm.questions[3], cleared.selections);
+    assert.equal(q2AvailAfterClear.find((c) => c.id === 'c-ds').isDisabled, false);
+    assert.equal(q4AvailAfterClear.find((c) => c.id === 'c-ds').isDisabled, false);
+  });
+});
+

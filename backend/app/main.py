@@ -30,6 +30,12 @@ async def lifespan(_app: FastAPI):
         )
     try:
         ensure_indexes()
+        from .database import get_database
+        db = get_database()
+        if db.courses.count_documents({}) == 0:
+            from .seed import seed
+            seed()
+            logger.info("Database was empty; auto-seeded initial course catalogue and demo form.")
     except Exception as exc:  # pragma: no cover - startup resilience
         # The app should still boot so /docs and the health check work while a
         # database is being started. Requests that need MongoDB return 500.
