@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { errorDetailMessage } from './facultyFormApi.js';
-import { mapHttpError } from './facultyFormLogic.js';
+import { errorDetailMessage, submitFacultyResponse } from './facultyFormApi.js';
+import { initialSubmissionState, mapHttpError, submissionReducer } from './facultyFormLogic.js';
 import { validateFormData } from './facultyFormValidation.js';
 
 // Shape returned by GET /api/public/forms/{token} (backend/app/routers/public.py).
@@ -53,4 +53,28 @@ test('mapHttpError always returns a string message for list-style details', () =
 
   assert.equal(typeof mapped.message, 'string');
   assert.equal(mapped.message, 'faculty_name: Field required');
+});
+
+// POST /api/public/forms/{token}/responses answers 409 when the faculty ID has
+// already submitted the form; the backend's message is shown and not retried.
+test('a second submission (HTTP 409) shows the backend message', async () => {
+  const detail =
+    'Preferences have already been submitted for this form with this Faculty ID. A submitted response cannot be changed.';
+  const fetchFn = async () => ({
+    ok: false,
+    status: 409,
+    headers: { get: () => 'application/json' },
+    json: async () => ({ detail }),
+  });
+
+  await assert.rejects(
+    submitFacultyResponse('token', { answers: [] }, { fetchFn, baseUrl: '' }),
+    (error) => {
+      const mapped = mapHttpError(error.status, error.data);
+      assert.equal(error.status, 409);
+      assert.equal(mapped.message, detail);
+      assert.equal(mapped.isRetryable, false);
+      return true;
+    },
+  );
 });

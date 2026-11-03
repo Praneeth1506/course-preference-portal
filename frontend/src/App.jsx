@@ -1,5 +1,6 @@
 import {
   Link,
+  NavLink,
   Navigate,
   Outlet,
   Route,
@@ -10,10 +11,12 @@ import {
 import { useAuth } from "./AuthContext";
 import { FullPageLoading } from "./components";
 import { FacultyPreferenceForm } from "./features/faculty-form/FacultyPreferenceForm.jsx";
+import ChangePasswordPage from "./pages/ChangePasswordPage";
 import FormBuilderPage from "./pages/FormBuilderPage";
 import FormsPage from "./pages/FormsPage";
 import LoginPage from "./pages/LoginPage";
 import NotFoundPage from "./pages/NotFoundPage";
+import OpenElectivesPage from "./pages/OpenElectivesPage";
 import ResponsesPage from "./pages/ResponsesPage";
 
 function RequireAuth({ children }) {
@@ -49,9 +52,18 @@ function AdminLayout() {
             <span>Course Preference Portal</span>
           </Link>
           <nav className="header-nav" aria-label="Administrator navigation">
+            <NavLink className="nav-link" to="/admin/forms">
+              Forms
+            </NavLink>
+            <NavLink className="nav-link" to="/admin/open-electives">
+              Open electives
+            </NavLink>
             <span className="signed-in">
               Signed in as <strong>{user?.username}</strong>
             </span>
+            <NavLink className="nav-link" to="/admin/password">
+              Change password
+            </NavLink>
             <button
               type="button"
               className="btn btn-secondary btn-small"
@@ -100,6 +112,8 @@ export default function App() {
           path="/admin/forms/:formId/responses"
           element={<ResponsesPage />}
         />
+        <Route path="/admin/open-electives" element={<OpenElectivesPage />} />
+        <Route path="/admin/password" element={<ChangePasswordPage />} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

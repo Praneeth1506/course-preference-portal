@@ -18,51 +18,6 @@ import { PreferenceQuestionCard } from './PreferenceQuestionCard.jsx';
 import { SubmissionFeedback } from './SubmissionFeedback.jsx';
 
 /**
- * Demo fallback form data for evaluation when no backend is running
- */
-const DEMO_FALLBACK_FORM = {
-  token: 'demo-spring-2026',
-  title: 'Spring 2026 Computer Science Course Preference Form',
-  description:
-    'Please select your preferred teaching assignments for the upcoming semester. You may select each course for at most one preference slot.',
-  questions: [
-    {
-      id: 'q-pref-1',
-      title: 'First Preference (Primary Teaching Choice)',
-      order: 1,
-      courses: [
-        { id: 'cs-101', code: 'CS101', name: 'Introduction to Programming in Python', department: 'CS' },
-        { id: 'cs-201', code: 'CS201', name: 'Data Structures and Algorithms', department: 'CS' },
-        { id: 'cs-301', code: 'CS301', name: 'Operating Systems', department: 'CS' },
-        { id: 'cs-401', code: 'CS401', name: 'Artificial Intelligence', department: 'CS' },
-      ],
-    },
-    {
-      id: 'q-pref-2',
-      title: 'Second Preference (Secondary Teaching Choice)',
-      order: 2,
-      courses: [
-        { id: 'cs-101', code: 'CS101', name: 'Introduction to Programming in Python', department: 'CS' },
-        { id: 'cs-201', code: 'CS201', name: 'Data Structures and Algorithms', department: 'CS' },
-        { id: 'cs-302', code: 'CS302', name: 'Computer Networks', department: 'CS' },
-        { id: 'cs-401', code: 'CS401', name: 'Artificial Intelligence', department: 'CS' },
-      ],
-    },
-    {
-      id: 'q-pref-3',
-      title: 'Third Preference (Alternative Choice)',
-      order: 3,
-      courses: [
-        { id: 'cs-201', code: 'CS201', name: 'Data Structures and Algorithms', department: 'CS' },
-        { id: 'cs-301', code: 'CS301', name: 'Operating Systems', department: 'CS' },
-        { id: 'cs-302', code: 'CS302', name: 'Computer Networks', department: 'CS' },
-        { id: 'cs-402', code: 'CS402', name: 'Database Management Systems', department: 'CS' },
-      ],
-    },
-  ],
-};
-
-/**
  * FacultyPreferenceForm Component
  *
  * Main public-facing faculty form:
@@ -110,12 +65,7 @@ export function FacultyPreferenceForm({
 
     async function executeFetch() {
       try {
-        let rawData;
-        if (token === 'demo-spring-2026' || token === 'demo') {
-          rawData = DEMO_FALLBACK_FORM;
-        } else {
-          rawData = await apiClient.fetchPublicForm(token);
-        }
+        const rawData = await apiClient.fetchPublicForm(token);
 
         if (ignore) return;
 
@@ -247,14 +197,27 @@ export function FacultyPreferenceForm({
     dispatch({ type: 'RESET' });
   };
 
-  // Manual Token Entry Handler (when token is missing in URL)
+  // Manual Token Entry Handler (when token is missing in URL). Accepts the
+  // token itself or the whole share link (https://.../forms/<token>).
   const handleManualTokenSubmit = (e) => {
     e.preventDefault();
-    if (manualTokenInput.trim()) {
-      setIsLoadingForm(true);
-      setFormLoadError(null);
-      setToken(manualTokenInput.trim());
+    const entered = manualTokenInput.trim();
+    if (!entered) return;
+    let enteredToken = entered;
+    if (/^https?:\/\//i.test(entered)) {
+      try {
+        enteredToken = extractTokenFromUrl(new URL(entered));
+      } catch {
+        enteredToken = '';
+      }
     }
+    if (!enteredToken) {
+      setFormLoadError('That link does not contain a form token. Check the link you received.');
+      return;
+    }
+    setIsLoadingForm(true);
+    setFormLoadError(null);
+    setToken(enteredToken);
   };
 
   const isSubmitting = submissionState.isSubmitting;
@@ -275,36 +238,26 @@ export function FacultyPreferenceForm({
         <div className="token-prompt-card">
           <h2>Access Preference Form</h2>
           <p style={{ color: '#64748b', fontSize: '0.95rem' }}>
-            Please enter your public form token or click the button below to load a demonstration form.
+            Open the form link you received, or paste the link or its form token below.
           </p>
           <form onSubmit={handleManualTokenSubmit} className="token-input-group">
             <input
               type="text"
               className="token-input"
-              placeholder="e.g. spring-2026-cs"
+              placeholder="Form link or token"
               value={manualTokenInput}
               onChange={(e) => setManualTokenInput(e.target.value)}
-              aria-label="Public Form Token"
+              aria-label="Form link or token"
             />
             <button type="submit" className="btn-primary" style={{ width: 'auto' }}>
               Load Form
             </button>
           </form>
-
-          <div style={{ marginTop: '1.5rem', borderTop: '1px solid #f1f5f9', paddingTop: '1rem' }}>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setIsLoadingForm(true);
-                setFormLoadError(null);
-                setToken('demo-spring-2026');
-              }}
-              data-testid="btn-demo-form"
-            >
-              Load Sample Demo Form
-            </button>
-          </div>
+          {formLoadError ? (
+            <p role="alert" style={{ color: '#b42318', fontSize: '0.9rem', marginTop: '0.75rem' }}>
+              {formLoadError}
+            </p>
+          ) : null}
         </div>
       </div>
     );
@@ -445,6 +398,10 @@ export function FacultyPreferenceForm({
         })}
 
         {/* Actions Section */}
+        <p className="resubmit-note" data-testid="resubmit-note">
+          Each Faculty ID can submit this form once. Check your choices before submitting; they
+          cannot be changed afterwards.
+        </p>
         <div className="portal-actions">
           <button
             type="submit"

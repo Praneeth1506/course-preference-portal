@@ -58,7 +58,7 @@ export default function ResponsesPage() {
           </div>
           <p className="muted">
             {data
-              ? `${data.total} ${data.total === 1 ? "response" : "responses"}`
+              ? `${data.total} ${data.total === 1 ? "response" : "responses"}, one per faculty ID.`
               : "Review submitted faculty preferences."}
           </p>
         </div>

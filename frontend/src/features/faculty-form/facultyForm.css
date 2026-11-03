@@ -323,7 +323,13 @@
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  margin-top: 2rem;
+  margin-top: 1rem;
+}
+
+.resubmit-note {
+  margin: 2rem 0 0;
+  color: #64748b;
+  font-size: 0.875rem;
 }
 
 .btn-primary {

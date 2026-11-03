@@ -164,6 +164,44 @@ def test_publish_rejects_nonexistent_course(client, db, admin_headers):
     assert db.forms.find_one({"_id": ObjectId(form["form_id"])})["status"] == "draft"
 
 
+def test_publish_allows_a_course_in_several_questions(client, db, admin_headers):
+    shared = insert_course(db, "CS201", "Algorithms", 2)
+    other = insert_course(db, "CS202", "Architecture", 2)
+    form = create_form(
+        client,
+        admin_headers,
+        questions=[question_doc("q1", [shared, other]), question_doc("q2", [shared])],
+    )
+
+    published = publish_form(client, admin_headers, form["form_id"])
+
+    assert published["status"] == "published"
+
+
+def test_publish_rejects_questions_without_enough_distinct_courses(
+    client, db, admin_headers
+):
+    first = insert_course(db, "CS201", "Algorithms", 2)
+    second = insert_course(db, "CS202", "Architecture", 2)
+    form = create_form(
+        client,
+        admin_headers,
+        questions=[
+            question_doc("q1", [first, second]),
+            question_doc("q2", [second, first]),
+            question_doc("q3", [first]),
+        ],
+    )
+
+    response = client.post(
+        f"/api/forms/{form['form_id']}/publish", headers=admin_headers
+    )
+
+    assert response.status_code == 422
+    assert "Question q3 cannot be answered" in response.json()["detail"]
+    assert db.forms.find_one({"_id": ObjectId(form["form_id"])})["status"] == "draft"
+
+
 def test_publish_rejects_malformed_course_id(client, db, admin_headers):
     form = insert_form(
         db,
@@ -192,6 +230,30 @@ def test_publish_respects_question_semester_restriction(client, db, admin_header
     )
     assert response.status_code == 422
     assert "semester" in response.json()["detail"].lower()
+
+
+def test_electives_with_no_fixed_semester_suit_a_semester_question(
+    client, db, admin_headers
+):
+    core = insert_course(db, "23Z401", semester=4)
+    elective = insert_course(db, "23Z013/23N013", "Blockchain Technology", semester=None)
+    form = create_form(
+        client,
+        admin_headers,
+        questions=[question_doc("q1", [core, elective], semester=4)],
+    )
+    published = publish_form(client, admin_headers, form["form_id"])
+
+    response = client.post(
+        f"/api/public/forms/{published['public_token']}/responses",
+        json={
+            "faculty_name": "Demo Faculty",
+            "faculty_id": "FAC001",
+            "answers": [{"question_id": "q1", "course_id": str(elective)}],
+        },
+    )
+
+    assert response.status_code == 201, response.text
 
 
 def test_repeated_publish_is_idempotent(client, db, admin_headers):

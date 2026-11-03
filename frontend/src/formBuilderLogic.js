@@ -2,7 +2,9 @@
  * Pure helpers for the admin form builder (FormBuilderPage).
  *
  * A builder question is { key, question_id, text, course_ids, semester }.
- * Courses come from GET /api/courses: { course_id, course_code, course_name, semester }.
+ * Courses come from GET /api/courses: { course_id, course_code, course_name,
+ * semester, category, credits, elective_group, offered_by, source, programmes }.
+ * A course with no programmes (an open elective added by hand) suits any programme.
  * Every helper returns new arrays/objects; nothing is mutated.
  */
 
@@ -25,22 +27,11 @@ export function resizeQuestions(questions, count, createQuestion) {
   return [...questions, ...added];
 }
 
-/** Map of course_id -> index of the first question that uses it. */
-export function courseAssignments(questions) {
-  const assigned = new Map();
-  questions.forEach((question, index) => {
-    for (const courseId of question.course_ids) {
-      if (!assigned.has(courseId)) assigned.set(courseId, index);
-    }
-  });
-  return assigned;
-}
-
-/** Select or unselect a course; a course already used by another question is left alone. */
+/**
+ * Select or unselect a course. A course may be offered in several questions;
+ * faculty can still pick it for only one of them.
+ */
 export function toggleCourse(questions, index, courseId) {
-  const owner = courseAssignments(questions).get(courseId);
-  if (owner !== undefined && owner !== index) return questions;
-
   return questions.map((question, questionIndex) => {
     if (questionIndex !== index) return question;
     const selected = question.course_ids.includes(courseId);
@@ -51,6 +42,47 @@ export function toggleCourse(questions, index, courseId) {
         : [...question.course_ids, courseId],
     };
   });
+}
+
+/** Map of course_id -> indexes of the other questions that also offer it. */
+export function sharedCourses(questions, index) {
+  const shared = new Map();
+  questions.forEach((question, questionIndex) => {
+    if (questionIndex === index) return;
+    for (const courseId of question.course_ids) {
+      shared.set(courseId, [...(shared.get(courseId) || []), questionIndex]);
+    }
+  });
+  return shared;
+}
+
+/**
+ * Indexes of questions that cannot all get a different course, or [] when
+ * faculty can answer every question with a distinct course (bipartite matching).
+ */
+export function unanswerableQuestions(questions) {
+  const matchedBy = new Map();
+
+  const assign = (index, visited) => {
+    for (const courseId of questions[index].course_ids) {
+      if (visited.has(courseId)) continue;
+      visited.add(courseId);
+      const holder = matchedBy.get(courseId);
+      if (holder === undefined || assign(holder, visited)) {
+        matchedBy.set(courseId, index);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const stuck = [];
+  questions.forEach((question, index) => {
+    if (question.course_ids.length > 0 && !assign(index, new Set())) {
+      stuck.push(index);
+    }
+  });
+  return stuck;
 }
 
 export function removeCourse(questions, index, courseId) {
@@ -64,9 +96,89 @@ export function removeCourse(questions, index, courseId) {
   );
 }
 
+/** Whether a course has no fixed semester (most electives). */
+function anySemester(course) {
+  return course.semester === null || course.semester === undefined;
+}
+
+/** Courses a question restricted to `semester` may offer: that semester's courses plus electives with no fixed semester. */
 export function coursesForSemester(courses, semester) {
   if (semester === null || semester === undefined) return courses;
-  return courses.filter((course) => course.semester === semester);
+  return courses.filter((course) => anySemester(course) || course.semester === semester);
+}
+
+export const COURSE_TYPES = [
+  { value: "all", label: "All courses" },
+  { value: "core", label: "Semester courses" },
+  { value: "PE", label: "Professional electives" },
+  { value: "OE", label: "Open electives" },
+];
+
+function isElective(course) {
+  return course.category === "PE" || course.category === "OE";
+}
+
+/** Narrow the picker by course type and a code/name search; selections are unaffected. */
+/** Programmes named in the catalogue, e.g. ["BE CSE", "BE CSE (AI&ML)"]. */
+export function programmesFromCourses(courses) {
+  const names = new Set(courses.flatMap((course) => course.programmes || []));
+  return [...names].sort();
+}
+
+/** Short programme name: "BE CSE (AI&ML)" -> "AI&ML", "BE CSE" -> "CSE". */
+export function programmeLabel(programme) {
+  const inBrackets = programme.match(/\(([^)]+)\)\s*$/);
+  return inBrackets ? inBrackets[1] : programme.replace(/^BE\s+/, "");
+}
+
+export function filterCourses(
+  courses,
+  { type = "all", programme = "all", search = "" } = {},
+) {
+  const needle = search.trim().toLowerCase();
+  return courses.filter((course) => {
+    if (type === "core" && isElective(course)) return false;
+    if ((type === "PE" || type === "OE") && course.category !== type) return false;
+    const programmes = course.programmes || [];
+    if (programme !== "all" && programmes.length > 0 && !programmes.includes(programme)) {
+      return false;
+    }
+    if (!needle) return true;
+    return [course.course_code, course.course_name, course.offered_by]
+      .filter(Boolean)
+      .some((value) => value.toLowerCase().includes(needle));
+  });
+}
+
+/**
+ * Picker sections: one per semester, then professional and open electives
+ * (which the regulation does not tie to one semester), then anything else.
+ */
+export function courseGroups(courses) {
+  const semesters = new Map();
+  const professional = [];
+  const open = [];
+  const other = [];
+  for (const course of courses) {
+    if (course.category === "PE") professional.push(course);
+    else if (course.category === "OE") open.push(course);
+    else if (Number.isInteger(course.semester)) {
+      if (!semesters.has(course.semester)) semesters.set(course.semester, []);
+      semesters.get(course.semester).push(course);
+    } else other.push(course);
+  }
+  return [
+    ...[...semesters.entries()]
+      .sort((first, second) => first[0] - second[0])
+      .map(([semester, items]) => ({
+        key: `sem-${semester}`,
+        title: `Semester ${semester}`,
+        courses: items,
+      })),
+    { key: "PE", title: "Professional electives", courses: professional },
+    { key: "OE", title: "Open electives", courses: open },
+    { key: "other", title: "Other courses", courses: other },
+  ].filter((group) => group.courses.length > 0);
 }
 
 export function semestersFromCourses(courses) {
@@ -111,7 +223,6 @@ export function validateBuilder({ title, questions, courses, coursesLoaded }) {
   if (questions.length < MIN_QUESTIONS) errors.push("Add at least one question.");
 
   const courseById = new Map(courses.map((course) => [course.course_id, course]));
-  const seen = new Map();
 
   questions.forEach((question, index) => {
     const label = `Question ${index + 1}`;
@@ -120,14 +231,6 @@ export function validateBuilder({ title, questions, courses, coursesLoaded }) {
     }
 
     for (const courseId of question.course_ids) {
-      if (seen.has(courseId)) {
-        errors.push(
-          `${label}: a course is also used in Question ${seen.get(courseId) + 1}. Each course can appear in only one question.`,
-        );
-      } else {
-        seen.set(courseId, index);
-      }
-
       if (!coursesLoaded) continue;
       const course = courseById.get(courseId);
       if (!course) {
@@ -135,6 +238,7 @@ export function validateBuilder({ title, questions, courses, coursesLoaded }) {
       } else if (
         question.semester !== null &&
         question.semester !== undefined &&
+        !anySemester(course) &&
         course.semester !== question.semester
       ) {
         errors.push(
@@ -143,6 +247,12 @@ export function validateBuilder({ title, questions, courses, coursesLoaded }) {
       }
     }
   });
+
+  for (const index of unanswerableQuestions(questions)) {
+    errors.push(
+      `Question ${index + 1}: faculty must pick a different course for each question, but its courses are all needed by other questions. Add more courses.`,
+    );
+  }
 
   return errors;
 }

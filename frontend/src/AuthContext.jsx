@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -19,6 +20,9 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(() => getStoredToken());
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(() => Boolean(getStoredToken()));
+  // A token the server just issued (sign-in or password change) needs no
+  // /auth/me check; re-checking would briefly unmount the current page.
+  const issuedToken = useRef(null);
 
   const resetSession = useCallback(() => {
     clearStoredToken();
@@ -40,6 +44,7 @@ export function AuthProvider({ children }) {
       setUser(null);
       return undefined;
     }
+    if (token === issuedToken.current) return undefined;
 
     let active = true;
     setChecking(true);
@@ -62,10 +67,20 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (username, password) => {
     const data = await api.login(username, password);
+    issuedToken.current = data.access_token;
     storeToken(data.access_token);
     setUser({ username: data.username, role: "admin" });
     setToken(data.access_token);
     setChecking(false);
+    return data;
+  }, []);
+
+  // Other sessions are signed out by the server; this one gets a new token.
+  const changePassword = useCallback(async (currentPassword, newPassword) => {
+    const data = await api.changePassword(currentPassword, newPassword);
+    issuedToken.current = data.access_token;
+    storeToken(data.access_token);
+    setToken(data.access_token);
     return data;
   }, []);
 
@@ -81,8 +96,9 @@ export function AuthProvider({ children }) {
       isAuthenticated: Boolean(token && user),
       login,
       logout,
+      changePassword,
     }),
-    [token, user, checking, login, logout],
+    [token, user, checking, login, logout, changePassword],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

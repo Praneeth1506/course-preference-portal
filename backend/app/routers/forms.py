@@ -263,13 +263,15 @@ def _validate_publishable(db: Database, form: dict[str, Any]) -> None:
             )
 
     # Respect an optional per-question semester restriction if one is present.
+    # Courses with no fixed semester (most electives) suit any semester.
     for question, canonical_ids in per_question_ids:
         question_id = question.get("question_id")
         semester = question.get("semester")
         if semester is None:
             continue
         for cid in canonical_ids:
-            if course_map[cid].get("semester") != semester:
+            course_semester = course_map[cid].get("semester")
+            if course_semester is not None and course_semester != semester:
                 raise HTTPException(
                     status_code=HTTP_422,
                     detail=(
@@ -277,6 +279,44 @@ def _validate_publishable(db: Database, form: dict[str, Any]) -> None:
                         f"{semester}, but one of its courses is not."
                     ),
                 )
+
+    # A course may be offered in several questions, but faculty pick each
+    # course only once, so every question must be able to get its own course.
+    stuck = _unanswerable_question(per_question_ids)
+    if stuck is not None:
+        raise HTTPException(
+            status_code=HTTP_422,
+            detail=(
+                f"Question {stuck} cannot be answered with a different course "
+                "from the other questions. Add more courses."
+            ),
+        )
+
+
+def _unanswerable_question(
+    per_question_ids: list[tuple[dict[str, Any], list[str]]],
+) -> str | None:
+    """Return the ID of a question left without a distinct course, if any.
+
+    Bipartite matching of questions to courses (augmenting paths).
+    """
+    matched_by: dict[str, int] = {}
+
+    def assign(index: int, visited: set[str]) -> bool:
+        for course_id in per_question_ids[index][1]:
+            if course_id in visited:
+                continue
+            visited.add(course_id)
+            holder = matched_by.get(course_id)
+            if holder is None or assign(holder, visited):
+                matched_by[course_id] = index
+                return True
+        return False
+
+    for index, (question, _course_ids) in enumerate(per_question_ids):
+        if not assign(index, set()):
+            return question.get("question_id")
+    return None
 
 
 def _generate_public_token() -> str:

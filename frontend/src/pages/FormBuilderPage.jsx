@@ -9,17 +9,22 @@ import {
   StatusBadge,
 } from "../components";
 import {
+  COURSE_TYPES,
   MAX_QUESTIONS,
   MIN_QUESTIONS,
   buildFormPayload,
   clampQuestionCount,
-  courseAssignments,
+  courseGroups,
   coursesForSemester,
   defaultQuestionText,
+  filterCourses,
+  programmeLabel,
+  programmesFromCourses,
   removeCourse,
   resizeQuestions,
   semestersFromCourses,
   setQuestionSemester,
+  sharedCourses,
   toggleCourse,
   validateBuilder,
 } from "../formBuilderLogic";
@@ -42,18 +47,15 @@ function newQuestion() {
   };
 }
 
-function groupBySemester(courses) {
-  const groups = new Map();
-  for (const course of courses) {
-    const key = course.semester ?? "unknown";
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(course);
-  }
-  return [...groups.entries()].sort((first, second) => {
-    if (first[0] === "unknown") return 1;
-    if (second[0] === "unknown") return -1;
-    return first[0] - second[0];
-  });
+const NO_FILTER = { type: "all", programme: "all", search: "" };
+
+// Shown beside a course when its group title does not already say it, e.g.
+// "Language Elective" in Semester 2 or a vertical among professional electives.
+const GENERIC_GROUPS = ["Professional Elective", "Open Elective"];
+
+function courseTag(course) {
+  const group = course.elective_group;
+  return group && !GENERIC_GROUPS.includes(group) ? group : null;
 }
 
 export default function FormBuilderPage() {
@@ -75,6 +77,8 @@ export default function FormBuilderPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [questionNotices, setQuestionNotices] = useState({});
+  // Picker filters are view-only and keyed by question key; they are not saved.
+  const [pickerFilters, setPickerFilters] = useState({});
   const [showIssues, setShowIssues] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -153,11 +157,11 @@ export default function FormBuilderPage() {
   }, [formId]);
 
   const semesters = useMemo(() => semestersFromCourses(courses), [courses]);
+  const programmes = useMemo(() => programmesFromCourses(courses), [courses]);
   const courseById = useMemo(
     () => new Map(courses.map((course) => [course.course_id, course])),
     [courses],
   );
-  const assignments = useMemo(() => courseAssignments(questions), [questions]);
 
   const issues = validateBuilder({
     title,
@@ -212,6 +216,13 @@ export default function FormBuilderPage() {
         result.removedCount > 0
           ? `Removed ${result.removedCount} selected course(s) that are not in Semester ${semester}.`
           : "",
+    }));
+  };
+
+  const updatePickerFilter = (key, changes) => {
+    setPickerFilters((current) => ({
+      ...current,
+      [key]: { ...NO_FILTER, ...current[key], ...changes },
     }));
   };
 
@@ -455,7 +466,7 @@ export default function FormBuilderPage() {
                   <h3>{question.text.trim() || defaultQuestionText(index)}</h3>
                   <p className="muted small">
                     {question.semester
-                      ? `Semester ${question.semester} courses`
+                      ? `Semester ${question.semester} courses and electives`
                       : "Courses from any semester"}
                   </p>
                 </div>
@@ -563,7 +574,14 @@ export default function FormBuilderPage() {
 
       <div className="questions-editor">
         {questions.map((question, index) => {
-          const available = coursesForSemester(courses, question.semester);
+          const inSemester = coursesForSemester(courses, question.semester);
+          const filter = pickerFilters[question.key] || NO_FILTER;
+          const available = filterCourses(inSemester, filter);
+          const filtered =
+            filter.type !== "all" ||
+            filter.programme !== "all" ||
+            filter.search.trim() !== "";
+          const shared = sharedCourses(questions, index);
           return (
             <article className="card question-card" key={question.key}>
               <div className="question-head">
@@ -686,7 +704,63 @@ export default function FormBuilderPage() {
               </div>
 
               <div className="field">
-                <span className="field-label">Available courses</span>
+                <div className="picker-head">
+                  <span className="field-label">Available courses</span>
+                  <Link className="text-link small" to="/admin/open-electives">
+                    Manage open electives
+                  </Link>
+                </div>
+                {!coursesLoading && courses.length > 0 ? (
+                  <div className="picker-filters">
+                    <select
+                      className="input"
+                      aria-label="Course type"
+                      value={filter.type}
+                      onChange={(event) =>
+                        updatePickerFilter(question.key, {
+                          type: event.target.value,
+                        })
+                      }
+                    >
+                      {COURSE_TYPES.map((type) => (
+                        <option key={type.value} value={type.value}>
+                          {type.label}
+                        </option>
+                      ))}
+                    </select>
+                    {programmes.length > 1 ? (
+                      <select
+                        className="input"
+                        aria-label="Programme"
+                        value={filter.programme}
+                        onChange={(event) =>
+                          updatePickerFilter(question.key, {
+                            programme: event.target.value,
+                          })
+                        }
+                      >
+                        <option value="all">All programmes</option>
+                        {programmes.map((programme) => (
+                          <option key={programme} value={programme}>
+                            {programme}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                    <input
+                      className="input"
+                      type="search"
+                      aria-label="Search courses"
+                      placeholder="Search code or name"
+                      value={filter.search}
+                      onChange={(event) =>
+                        updatePickerFilter(question.key, {
+                          search: event.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                ) : null}
                 {coursesLoading ? <Loading label="Loading courses…" /> : null}
                 {!coursesLoading && coursesError ? (
                   <p className="muted small">
@@ -702,65 +776,88 @@ export default function FormBuilderPage() {
                 ) : null}
                 {!coursesLoading &&
                 courses.length > 0 &&
-                available.length === 0 ? (
+                inSemester.length === 0 ? (
                   <p className="muted small">
                     No courses are available for Semester {question.semester}.
                     Choose another semester.
                   </p>
                 ) : null}
+                {inSemester.length > 0 && available.length === 0 && filtered ? (
+                  <p className="muted small">
+                    No courses match this filter.{" "}
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={() => updatePickerFilter(question.key, NO_FILTER)}
+                    >
+                      Clear filter
+                    </button>
+                  </p>
+                ) : null}
                 <div className="course-picker">
-                  {groupBySemester(available).map(
-                    ([semester, semesterCourses]) => (
-                      <div className="course-group" key={semester}>
-                        <p className="course-group-title">
-                          {semester === "unknown"
-                            ? "Other courses"
-                            : `Semester ${semester}`}
-                        </p>
-                        <div className="course-options">
-                          {semesterCourses.map((course) => {
-                            const checked = question.course_ids.includes(
-                              course.course_id,
-                            );
-                            const owner = assignments.get(course.course_id);
-                            const takenElsewhere =
-                              owner !== undefined && owner !== index;
-                            return (
-                              <label
-                                className={`checkbox-row ${checked ? "checked" : ""} ${takenElsewhere ? "taken" : ""}`}
-                                key={course.course_id}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  disabled={takenElsewhere}
-                                  onChange={() =>
-                                    setQuestions(
-                                      toggleCourse(
-                                        questions,
-                                        index,
-                                        course.course_id,
-                                      ),
-                                    )
-                                  }
-                                />
-                                <span>
-                                  <strong>{course.course_code}</strong>{" "}
-                                  {course.course_name}
-                                  {takenElsewhere ? (
-                                    <span className="muted small">
-                                      {" "}
-                                      — used in Question {owner + 1}
-                                    </span>
-                                  ) : null}
-                                </span>
-                              </label>
-                            );
-                          })}
-                        </div>
+                  {courseGroups(available).map((group) => (
+                    <div className="course-group" key={group.key}>
+                      <p className="course-group-title">{group.title}</p>
+                      <div className="course-options">
+                        {group.courses.map((course) => {
+                          const checked = question.course_ids.includes(
+                            course.course_id,
+                          );
+                          const alsoIn = shared.get(course.course_id);
+                          return (
+                            <label
+                              className={`checkbox-row ${checked ? "checked" : ""}`}
+                              key={course.course_id}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() =>
+                                  setQuestions(
+                                    toggleCourse(
+                                      questions,
+                                      index,
+                                      course.course_id,
+                                    ),
+                                  )
+                                }
+                              />
+                              <span>
+                                <strong>{course.course_code}</strong>{" "}
+                                {course.course_name}
+                                {filter.programme === "all" &&
+                                course.programmes?.length === 1 ? (
+                                  <span className="pill pill-programme">
+                                    {programmeLabel(course.programmes[0])}
+                                  </span>
+                                ) : null}
+                                {courseTag(course) ? (
+                                  <span className="pill">
+                                    {courseTag(course)}
+                                  </span>
+                                ) : null}
+                                {course.category === "OE" &&
+                                course.offered_by ? (
+                                  <span className="muted small">
+                                    {" "}
+                                    — {course.offered_by}
+                                  </span>
+                                ) : null}
+                                {alsoIn ? (
+                                  <span className="muted small">
+                                    {" "}
+                                    — also in Question
+                                    {alsoIn.length > 1 ? "s" : ""}{" "}
+                                    {alsoIn.map((other) => other + 1).join(", ")}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </label>
+                          );
+                        })}
                       </div>
-                    ),
-                  )}
+                    </div>
+                  ))}
                 </div>
               </div>
             </article>

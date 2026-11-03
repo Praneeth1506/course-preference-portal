@@ -22,6 +22,17 @@ MongoDB, and JSON over HTTP.
 - Server-side validation for faculty details and every answer, including
   missing/extra/duplicate questions, unassigned courses, nonexistent courses,
   and the same course selected across multiple questions.
+- Course catalogue loaded from the 2023 Regulations for BE CSE and BE CSE
+  (AI&ML) (`Regulation.pdf` is the AI&ML document): every semester course plus
+  language, professional and open electives, with category and L-T-P-C. A
+  course both programmes teach identically is one entry with a joined code such
+  as `23Z402/23N402`; the form builder can filter courses by programme.
+- Open electives page where the admin adds, edits and deletes open electives
+  offered by other departments; they appear with the other courses in the form
+  builder, which groups courses by semester and elective type and can filter
+  and search them.
+- One response per faculty ID per form: a second submission with the same
+  faculty ID is rejected and the first response is kept.
 - Response storage in the `responses` collection with a UTC submission time.
 - Authenticated admin response view with faculty details, question text, course
   code/name, and localized submission time.
@@ -45,10 +56,11 @@ backend/
     security.py          Admin credential check and JWT dependency
     schemas.py           Pydantic request/response models
     utils.py             ObjectId/timestamp/JSON helpers
-    seed.py              Sample courses + demo draft form
+    regulation.py        2023 Regulation course lists (BE CSE, BE CSE AI&ML)
+    seed.py              Loads the regulation courses
     routers/
-      auth.py            POST /api/auth/login, GET /api/auth/me
-      courses.py         GET /api/courses
+      auth.py            POST /api/auth/login, POST /api/auth/password, GET /api/auth/me
+      courses.py         GET /api/courses, open elective CRUD
       forms.py           Form CRUD, publish, admin response listing
       public.py          Public form retrieval and response submission
   tests/                 pytest + mongomock test suite
@@ -106,9 +118,18 @@ The frontend dev server proxies `/api` to port 8000. If that port is taken,
 run uvicorn with `--port 8001` and start the frontend with
 `VITE_API_BASE_URL=http://localhost:8001` (in `frontend/.env`).
 
-`app.seed` is safe to rerun. It upserts sample courses by course code and only
-creates the demo draft form when the `forms` collection is empty. It never
-deletes existing data.
+`app.seed` is safe to rerun. It upserts the 129 regulation courses by course
+code (correcting names, semesters and credits on existing records); it never
+creates forms or responses. 70 of them
+are taught identically by both programmes and are stored once under a joined
+code such as `23Z402/23N402`; a record seeded earlier under `23N402` alone is
+updated in place, so forms that use it keep working. Courses that share a name
+but differ in semester, category or credits (for example Operating Systems,
+`23Z501` in Semester V and `23N404` in Semester IV) stay separate. It never
+deletes data unless asked: it lists courses that are not in the regulation
+(for example the old `CS101`-style demo courses), and
+`python -m app.seed --prune-legacy` deletes the ones no form uses. Open
+electives added on the admin page are never touched.
 
 ### 2. Frontend
 
@@ -129,21 +150,37 @@ set in `backend/.env`; there are no built-in default credentials. Credentials
 are configured only in the backend environment; they are not stored in or sent
 to the frontend.
 
+**Changing the password:** signed-in admins can use **Change password** in the
+header. The new password's bcrypt hash is stored in MongoDB
+(`admin_credentials`) and from then on replaces the environment password, which
+stops working. Changing it signs out every other session; the current one stays
+signed in. Passwords must be 8 characters to 72 bytes. If the password is
+forgotten, run from `backend` (with database access):
+
+```bash
+python -m scripts.reset_admin_password            # prompts for a new password
+python -m scripts.reset_admin_password --use-env  # use ADMIN_PASSWORD(_HASH) again
+```
+
+Because the password is checked against MongoDB, sign-in returns HTTP 503 while
+the database is unreachable.
+
 ### 3. Demonstrate the full flow
 
 1. Sign in at <http://localhost:5173/login> (or open <http://localhost:5173/admin>).
 2. Select **New form**, enter a title, and set the **Number of preference
    questions**; one section appears per question.
 3. For each question, optionally restrict it to a semester, then check the
-   courses faculty may choose. A course used in one question is disabled in
-   the others, and every question needs at least one course.
+   courses faculty may choose. The same course can be offered in several
+   questions. Every question needs at least one course, and there must be
+   enough distinct courses for faculty to pick a different one per question.
 4. Use **Preview** to check the configuration, then **Save draft** or
    **Publish form**.
 5. The share panel displays the real public URL. Use **Copy link** or **Open
    form**; the link has the form `/forms/<random-token>`.
 6. On the public page, enter a faculty name and faculty ID, then choose one
-   course per question. A course chosen in one question is disabled in the
-   others.
+   course per question. A course chosen in one question is disabled in every
+   other question that offers it.
 7. Submit. A confirmation and response reference are displayed.
 8. Return to the admin dashboard and open **Responses** for the form (or use
    **View responses** in the share panel) to see the submission.
@@ -196,7 +233,11 @@ an absolute URL instead, local development origins on any port for
 | ------ | --------------------------------- | ----------- | -------------------------------- |
 | POST   | `/api/auth/login`                 | Public      | Obtain an admin bearer token     |
 | GET    | `/api/auth/me`                    | Admin       | Verify the current session       |
-| GET    | `/api/courses?semester=N`         | Admin       | List courses (semester optional) |
+| POST   | `/api/auth/password`              | Admin       | Change the password (`current_password`, `new_password`); returns a new token, other tokens stop working |
+| GET    | `/api/courses?semester=N&category=C` | Admin    | List courses (both filters optional) |
+| POST   | `/api/courses/open-electives`     | Admin       | Add an open elective             |
+| PUT    | `/api/courses/open-electives/{id}`| Admin       | Edit a manually added elective   |
+| DELETE | `/api/courses/open-electives/{id}`| Admin       | Delete it (409 if a form uses it)|
 | POST   | `/api/forms`                      | Admin       | Create a draft form              |
 | GET    | `/api/forms`                      | Admin       | List forms with response counts  |
 | GET    | `/api/forms/{id}`                 | Admin       | Load a form for editing          |
@@ -300,10 +341,21 @@ The stored document contains `_id`, an ObjectId `form_id`, `faculty_name`,
 `faculty_id`, `answers` (each with `question_id` and ObjectId `course_id`), and
 a timezone-aware UTC `submitted_at`.
 
-**Duplicate submissions:** the MVP does not enforce one response per faculty ID.
-Multiple valid submissions are accepted; faculty ID is identification only, not
-authentication. This behavior can be changed later without altering the public
-API shape.
+**Duplicate submissions:** each faculty ID can submit a form once. A second
+submission with the same faculty ID (compared ignoring case and surrounding
+spaces) returns HTTP 409, the first response is kept unchanged, and the faculty
+page shows the message. The same faculty ID can still answer other forms.
+Faculty ID is identification only, not authentication, so anyone who knows an
+ID can submit first under it; an administrator would need to delete that
+response in MongoDB to let the real faculty member submit.
+
+Responses saved before this rule existed have no `faculty_id_key`. To remove
+any duplicates among them (keeping the first), run from `backend`:
+
+```bash
+python -m scripts.dedupe_responses          # dry run: shows what would change
+python -m scripts.dedupe_responses --apply
+```
 
 ### Admin response listing
 
@@ -342,17 +394,29 @@ An empty form returns `"responses": []` and `"total": 0`.
 
 | Status | Meaning                                                              |
 | ------ | -------------------------------------------------------------------- |
-| 400    | Malformed MongoDB ObjectId in a path                                 |
-| 401    | Missing/expired/invalid admin token                                  |
+| 400    | Malformed MongoDB ObjectId in a path; wrong current password when changing it |
+| 401    | Missing/expired/invalid admin token, or one issued before the last password change |
 | 404    | Form, public token, or published form not found                     |
-| 409    | Attempt to edit a published form                                     |
+| 409    | Editing a published form; a faculty ID submitting a form again; duplicate course code; changing a regulation course, or a used open elective |
 | 422    | Invalid form schema, publish state, or submitted response            |
 | 500    | Unexpected/database error (safe external message, details logged)    |
+| 503    | Sign-in or the course list while MongoDB is unreachable              |
 
 ## Data model
 
 ```text
-courses:   { _id: ObjectId, code, name, semester, created_at }
+courses:   {
+             _id: ObjectId, code, name, semester: number | null,
+             category: "BS" | "HS" | "ES" | "PC" | "PE" | "OE" | "EEC" | "MC",
+             lecture, tutorial, practical, credits, elective_group,
+             source: "regulation" | "manual",
+             regulation?, codes?,         (regulation courses; codes lists each
+                                           programme's code, e.g. ["23Z402", "23N402"])
+             programmes?,                 (e.g. ["BE CSE", "BE CSE (AI&ML)"];
+                                           empty for manual open electives)
+             offered_by?,                 (manual open electives)
+             created_at, updated_at
+           }
 forms:     {
              _id: ObjectId,
              title, description, status: "draft" | "published",
@@ -366,15 +430,22 @@ forms:     {
 responses: {
              _id: ObjectId,
              form_id: ObjectId,
-             faculty_name, faculty_id,
+             faculty_name, faculty_id, faculty_id_key,
              answers: [{ question_id, course_id: ObjectId }],
              submitted_at
+           }
+admin_credentials: {
+             _id: ADMIN_USERNAME,         (only once the password was changed)
+             password_hash?,              (bcrypt; absent after --use-env)
+             version, changed_at          (tokens carry the version as "pv")
            }
 ```
 
 Indexes created at startup: a partial unique index on
-`forms.public_token`, supporting form indexes, a `courses` code index, and a
-`responses` compound index on `(form_id, submitted_at)`.
+`forms.public_token`, a partial unique index on
+`responses (form_id, faculty_id_key)`, supporting form indexes, `courses` code,
+category and codes indexes, and a `responses` compound index on
+`(form_id, submitted_at)`.
 
 ## Running tests and checks
 
@@ -424,14 +495,41 @@ course prevention, successful submission, admin response rendering, and invalid
 token handling. That temporary browser script is not part of the repository;
 the committed live smoke test covers the same API workflow.
 
+## Deploying the frontend on Vercel
+
+`frontend/vercel.json` builds the Vite app and serves `index.html` for every
+path that is not a built file, so share links (`/forms/<token>`) and `/admin/*`
+pages work when opened directly. The backend is deployed separately; it must be
+reachable over HTTPS, since browsers block an HTTPS page calling an HTTP API.
+
+1. In Vercel, import the repository and set **Root Directory** to `frontend`.
+   The framework, build command and output directory come from `vercel.json`.
+2. Under **Settings → Environment Variables**, set `VITE_API_BASE_URL` to the
+   backend origin without `/api`, e.g. `https://course-portal-api.example.com`.
+   Vite builds it into the app, so redeploy after changing it.
+3. On the backend host, set:
+   - `FRONTEND_BASE_URL` to the Vercel URL, e.g. `https://<project>.vercel.app`.
+     Share links shown after publishing are built from it.
+   - `CORS_ORIGINS` to the same URL (comma-separate several). Preview
+     deployments get their own URLs, so add any you want to use, or test with
+     the production URL.
+4. Allow the backend host's outbound IP in MongoDB Atlas **Network Access**.
+   The browser never talks to MongoDB, so Vercel itself needs no access.
+5. Run `python -m app.seed` once against the production database to load the
+   courses, then sign in at `https://<project>.vercel.app/login`.
+
 ## Known limitations and notes
 
 - Authentication is a single environment-configured administrator, which is
   appropriate for this MVP. There is no user-management screen, password reset,
   MFA, or login rate limiting.
-- Courses are seeded and read-only. A course-management screen is out of scope.
+- Regulation courses are loaded by the seed and read-only in the app; only
+  open electives can be added or edited there. Regulation changes go in
+  `backend/app/regulation.py`. Self-directed learning courses (23IC01, 23IC02),
+  the Induction Programme and the Activity Point Programme are not loaded.
 - Published forms are immutable. Editing would invalidate existing submissions.
-- Duplicate faculty submissions are intentionally allowed (see above).
+- A submitted response cannot be changed by the faculty member; a second
+  submission with the same faculty ID is rejected (see above).
 - The public token is stored as-is in MongoDB because it is a capability URL;
   the unique index and high entropy make guessing impractical.
 - If a course is deleted after publication, it is hidden from the public form
@@ -455,11 +553,15 @@ the committed live smoke test covers the same API workflow.
     semester filter and returns 503 when MongoDB is unreachable.
   - `CourseResponse` / `CourseListResponse` (`app/schemas.py`) are adapted from
     `member2/course_schema.py`.
-  - Member 2's eight department courses (`23N301`–`23N504`) are seeded by
-    `python -m app.seed` together with the demo courses.
-- **Course documents** are stored as `{code, name, semester}` and returned as
-  `{course_id, course_code, course_name, semester}`; `course_id` is the `_id`
-  as a string and is what `questions[].course_ids` expects.
+  - Member 2's eight department courses (`23N301`–`23N504`) are now loaded
+    from the 2023 Regulation; several of their names and semesters were wrong
+    and the seed corrects them in place (for example `23N501` is Machine
+    Learning -2, `23N401` is Foundations of Optimization Techniques).
+- **Course documents** are stored with `code` / `name` and returned as
+  `{course_id, course_code, course_name, semester, ...}`; `course_id` is the
+  `_id` as a string and is what `questions[].course_ids` expects. The public
+  form still returns only `course_id`, `course_code`, `course_name` and
+  `semester`.
 - **Databases seeded by Member 2's original script** (fields `course_code` /
   `course_name`, unique index `course_code_1`): `python -m app.seed` stops and
   asks you to run `db.courses.dropIndex('course_code_1')` once; rerunning it

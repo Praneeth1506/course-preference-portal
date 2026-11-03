@@ -41,11 +41,6 @@ html:has(.full-page-loading) {
   max-width: 16rem;
 }
 
-.checkbox-row.taken {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
 .chip-removable {
   display: inline-flex;
   align-items: center;
@@ -69,4 +64,132 @@ html:has(.full-page-loading) {
 .issue-list {
   margin: 0.4rem 0 0;
   padding-left: 1.2rem;
+}
+
+.picker-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.picker-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.picker-filters select {
+  flex: 0 1 14rem;
+  min-width: 0;
+}
+
+.picker-filters input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.checkbox-row .pill {
+  margin-left: 0.35rem;
+  /* Shared electives can carry long labels, e.g. both programmes' verticals. */
+  white-space: normal;
+}
+
+.pill-programme {
+  background: #eef2fe;
+  color: var(--primary-strong);
+  font-weight: 600;
+}
+
+.link-button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--primary);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+@media (max-width: 560px) {
+  .picker-filters {
+    flex-direction: column;
+  }
+
+  .picker-filters select,
+  .picker-filters input {
+    flex-basis: auto;
+  }
+}
+
+/* Header navigation */
+.nav-link {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 0.3rem 0.1rem;
+  border-bottom: 2px solid transparent;
+}
+
+.nav-link:hover,
+.nav-link.active {
+  color: var(--primary);
+}
+
+.nav-link.active {
+  border-bottom-color: var(--primary);
+}
+
+@media (max-width: 640px) {
+  .header-nav .signed-in {
+    display: none;
+  }
+}
+
+/* Open electives page */
+.elective-form,
+.elective-list {
+  margin-bottom: 1.25rem;
+}
+
+.elective-form h2,
+.elective-list h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.9rem;
+}
+
+.password-form {
+  max-width: 28rem;
+}
+
+/* facultyForm.css styles .btn-primary at full width for every page. */
+.elective-form .actions .btn {
+  width: auto;
+}
+
+.elective-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0 1rem;
+}
+
+.elective-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.elective-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.elective-row:first-child {
+  border-top: 0;
 }

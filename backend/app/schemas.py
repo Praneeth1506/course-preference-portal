@@ -128,6 +128,29 @@ class FacultyResponseInput(BaseModel):
         return _strip(value)
 
 
+MIN_ADMIN_PASSWORD_LENGTH = 8
+# bcrypt only uses the first 72 bytes of a password; longer ones are refused
+# rather than silently truncated.
+MAX_ADMIN_PASSWORD_BYTES = 72
+
+
+class ChangePasswordRequest(BaseModel):
+    # Passwords are intentionally not stripped: whitespace can be meaningful.
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=MIN_ADMIN_PASSWORD_LENGTH, max_length=200)
+
+    @field_validator("new_password")
+    @classmethod
+    def check_new_password(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("The new password cannot be only spaces.")
+        if len(value.encode("utf-8")) > MAX_ADMIN_PASSWORD_BYTES:
+            raise ValueError(
+                f"The new password must be at most {MAX_ADMIN_PASSWORD_BYTES} bytes."
+            )
+        return value
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -163,14 +186,26 @@ class CourseResponse(BaseModel):
     course_code: str
     course_name: str
     semester: int | None = None
+    category: str | None = None
+    credits: int | None = None
+    elective_group: str | None = None
+    offered_by: str | None = None
+    source: str | None = None
+    # Empty for open electives added by an administrator: any programme.
+    programmes: list[str] = []
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "course_id": "6711c0ffee0000000000abcd",
                 "course_code": "23N501",
-                "course_name": "Machine Learning",
+                "course_name": "Machine Learning -2",
                 "semester": 5,
+                "category": "PC",
+                "credits": 4,
+                "elective_group": None,
+                "offered_by": None,
+                "source": "regulation",
             }
         }
     )
@@ -178,3 +213,32 @@ class CourseResponse(BaseModel):
 
 class CourseListResponse(BaseModel):
     courses: list[CourseResponse]
+
+
+class OpenElectiveInput(BaseModel):
+    """An open elective entered by hand, typically offered by another department."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    course_code: str = Field(min_length=1, max_length=20, pattern=r"^[A-Za-z0-9_-]+$")
+    course_name: str = Field(min_length=1, max_length=200)
+    offered_by: str | None = Field(default=None, max_length=200)
+    semester: int | None = Field(default=None, ge=1, le=20)
+    credits: int | None = Field(default=3, ge=0, le=20)
+
+    @field_validator("course_code", mode="before")
+    @classmethod
+    def normalize_code(cls, value: Any) -> Any:
+        stripped = _strip(value)
+        return stripped.upper() if isinstance(stripped, str) else stripped
+
+    @field_validator("course_name", mode="before")
+    @classmethod
+    def strip_name(cls, value: Any) -> Any:
+        return _strip(value)
+
+    @field_validator("offered_by", mode="before")
+    @classmethod
+    def blank_offered_by_is_none(cls, value: Any) -> Any:
+        stripped = _strip(value)
+        return None if stripped == "" else stripped

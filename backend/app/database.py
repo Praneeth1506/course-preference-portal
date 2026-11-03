@@ -78,6 +78,21 @@ def ensure_indexes(db: Database | None = None, *, force: bool = False) -> None:
         logger.warning("Could not create unique public-token index: %s", exc)
 
     try:
+        # One response per faculty member per form. Responses saved before
+        # duplicate handling have no faculty_id_key and are left out; if older
+        # duplicates exist, scripts/dedupe_responses.py removes them first.
+        target.responses.create_index(
+            [("form_id", ASCENDING), ("faculty_id_key", ASCENDING)],
+            name="uniq_form_faculty",
+            unique=True,
+            partialFilterExpression={"faculty_id_key": {"$type": "string"}},
+        )
+    except (PyMongoError, TypeError, NotImplementedError) as exc:
+        # The submit flow upserts on the same key, so this only guards races.
+        ready = False
+        logger.warning("Could not create unique form/faculty index: %s", exc)
+
+    try:
         target.forms.create_index([("status", ASCENDING)])
         target.forms.create_index([("created_at", DESCENDING)])
         target.responses.create_index(
@@ -85,6 +100,8 @@ def ensure_indexes(db: Database | None = None, *, force: bool = False) -> None:
         )
         target.courses.create_index([("code", ASCENDING)])
         target.courses.create_index([("semester", ASCENDING), ("code", ASCENDING)])
+        target.courses.create_index([("category", ASCENDING)])
+        target.courses.create_index([("codes", ASCENDING)])
     except PyMongoError as exc:
         ready = False
         logger.warning("Could not create supporting indexes: %s", exc)

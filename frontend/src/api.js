@@ -127,7 +127,26 @@ export const api = {
       auth: false,
     }),
   me: () => request("/auth/me"),
-  listCourses: () => request("/courses"),
+  changePassword: (currentPassword, newPassword) =>
+    request("/auth/password", {
+      method: "POST",
+      body: { current_password: currentPassword, new_password: newPassword },
+    }),
+  listCourses: ({ category } = {}) =>
+    request(
+      category ? `/courses?category=${encodeURIComponent(category)}` : "/courses",
+    ),
+  createOpenElective: (payload) =>
+    request("/courses/open-electives", { method: "POST", body: payload }),
+  updateOpenElective: (courseId, payload) =>
+    request(`/courses/open-electives/${encodeURIComponent(courseId)}`, {
+      method: "PUT",
+      body: payload,
+    }),
+  deleteOpenElective: (courseId) =>
+    request(`/courses/open-electives/${encodeURIComponent(courseId)}`, {
+      method: "DELETE",
+    }),
   listForms: () => request("/forms"),
   createForm: (payload) =>
     request("/forms", { method: "POST", body: payload }),

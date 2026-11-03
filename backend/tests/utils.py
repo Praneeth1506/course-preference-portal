@@ -12,7 +12,7 @@ def insert_course(
     db,
     code: str,
     name: str | None = None,
-    semester: int = 1,
+    semester: int | None = 1,
 ) -> ObjectId:
     course_id = ObjectId()
     db.courses.insert_one(

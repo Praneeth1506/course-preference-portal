@@ -340,7 +340,7 @@ def test_form_id_from_client_cannot_override_token(client, db, setup, admin_head
     assert stored["form_id"] != ObjectId(other_form["form_id"])
 
 
-def test_duplicate_submissions_are_allowed(client, db, setup):
+def test_different_faculty_get_separate_responses(client, db, setup):
     first = client.post(
         f"/api/public/forms/{setup.token}/responses", json=valid_payload(setup)
     )
@@ -352,6 +352,99 @@ def test_duplicate_submissions_are_allowed(client, db, setup):
     assert second.status_code == 201
     assert first.json()["response_id"] != second.json()["response_id"]
     assert db.responses.count_documents({}) == 2
+
+
+def test_submission_stores_the_faculty_id_key(client, db, setup):
+    response = client.post(
+        f"/api/public/forms/{setup.token}/responses", json=valid_payload(setup)
+    )
+    assert response.status_code == 201
+    assert set(response.json()) == {"message", "response_id", "submitted_at"}
+    assert db.responses.find_one({})["faculty_id_key"] == "fac001"
+
+
+def test_same_faculty_id_cannot_submit_again(client, db, setup):
+    first = client.post(
+        f"/api/public/forms/{setup.token}/responses", json=valid_payload(setup)
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        f"/api/public/forms/{setup.token}/responses",
+        json=valid_payload(
+            setup,
+            faculty_name="Someone Else",
+            faculty_id="  fac001 ",
+            answers=[
+                {"question_id": "q1", "course_id": str(setup.second)},
+                {"question_id": "q2", "course_id": str(setup.fourth)},
+            ],
+        ),
+    )
+
+    assert second.status_code == 409, second.text
+    assert "already been submitted" in second.json()["detail"]
+    assert db.responses.count_documents({}) == 1
+    stored = db.responses.find_one({})
+    assert stored["faculty_name"] == "Demo Faculty"
+    assert stored["answers"][0]["course_id"] == setup.first
+
+
+def test_response_saved_before_faculty_id_keys_also_blocks_resubmission(
+    client, db, setup
+):
+    db.responses.insert_one(
+        {
+            "form_id": ObjectId(setup.form_id),
+            "faculty_name": "Demo Faculty",
+            "faculty_id": "FAC001",
+            "answers": [],
+        }
+    )
+
+    response = client.post(
+        f"/api/public/forms/{setup.token}/responses", json=valid_payload(setup)
+    )
+
+    assert response.status_code == 409
+    assert db.responses.count_documents({}) == 1
+
+
+def test_same_faculty_id_on_another_form_is_a_new_response(
+    client, db, setup, admin_headers
+):
+    course = insert_course(db, "CS999")
+    other = create_form(
+        client, admin_headers, title="Other", questions=[question_doc("q1", [course])]
+    )
+    other_token = publish_form(client, admin_headers, other["form_id"])["public_token"]
+
+    client.post(f"/api/public/forms/{setup.token}/responses", json=valid_payload(setup))
+    response = client.post(
+        f"/api/public/forms/{other_token}/responses",
+        json=valid_payload(
+            setup, answers=[{"question_id": "q1", "course_id": str(course)}]
+        ),
+    )
+
+    assert response.status_code == 201
+    assert db.responses.count_documents({}) == 2
+
+
+def test_invalid_second_attempt_keeps_the_earlier_response(client, db, setup):
+    client.post(f"/api/public/forms/{setup.token}/responses", json=valid_payload(setup))
+
+    response = client.post(
+        f"/api/public/forms/{setup.token}/responses",
+        json=valid_payload(
+            setup,
+            answers=[{"question_id": "q1", "course_id": str(setup.second)}],
+        ),
+    )
+
+    assert response.status_code == 422
+    assert db.responses.count_documents({}) == 1
+    assert db.responses.find_one({})["answers"][0]["course_id"] == setup.first
 
 
 def test_invalid_submissions_are_never_inserted(client, db, setup):

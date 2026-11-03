@@ -32,6 +32,12 @@ def test_course_catalogue_is_sorted_and_serialized(client, db, admin_headers):
         "course_code",
         "course_name",
         "semester",
+        "category",
+        "programmes",
+        "credits",
+        "elective_group",
+        "offered_by",
+        "source",
     }
 
 

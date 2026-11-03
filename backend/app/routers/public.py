@@ -13,11 +13,12 @@ from typing import Any
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 from pymongo.database import Database
-from pymongo.errors import PyMongoError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from ..database import get_database
 from ..schemas import FacultyResponseInput
 from ..utils import (
+    faculty_id_key,
     iso_utc,
     normalize_object_id,
     serialize_course,
@@ -125,13 +126,68 @@ def get_public_form(
     }
 
 
+def _save_response(
+    db: Database,
+    form_id: ObjectId,
+    payload: FacultyResponseInput,
+    answers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Insert the response; each faculty ID may answer a form only once.
+
+    Faculty IDs are matched case- and whitespace-insensitively, so " fac001"
+    and "FAC001" are the same faculty member. A second submission is rejected
+    with 409 and the first one is kept unchanged.
+    """
+    key = faculty_id_key(payload.faculty_id)
+    already_submitted = HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Preferences have already been submitted for this form with this "
+            "Faculty ID. A submitted response cannot be changed."
+        ),
+    )
+    document = {
+        "form_id": form_id,
+        "faculty_name": payload.faculty_name,
+        "faculty_id": payload.faculty_id,
+        "faculty_id_key": key,
+        "answers": answers,
+        "submitted_at": utcnow(),
+    }
+    try:
+        # The unique (form_id, faculty_id_key) index also enforces this; the
+        # lookup covers responses saved before faculty_id_key existed.
+        earlier = db.responses.find_one(
+            {
+                "form_id": form_id,
+                "$or": [
+                    {"faculty_id_key": key},
+                    {"faculty_id_key": {"$exists": False}, "faculty_id": payload.faculty_id},
+                ],
+            },
+            {"_id": 1},
+        )
+        if earlier is not None:
+            raise already_submitted
+        document["_id"] = db.responses.insert_one(document).inserted_id
+    except DuplicateKeyError as exc:
+        # A concurrent submission with the same faculty ID was saved first.
+        raise already_submitted from exc
+    except PyMongoError as exc:
+        raise _server_error("Could not submit preferences.", "saving a response") from exc
+    return document
+
+
 @router.post("/{token}/responses", status_code=status.HTTP_201_CREATED)
 def submit_response(
     token: str,
     payload: FacultyResponseInput,
     db: Database = Depends(get_database),
 ) -> dict[str, Any]:
-    """Validate and store one faculty member's course preferences."""
+    """Validate and store one faculty member's course preferences.
+
+    Returns 409 if this faculty ID has already answered the form.
+    """
     form = _find_published_form(db, token)
     questions = _ordered_questions(form.get("questions") or [])
     if not questions:
@@ -244,7 +300,9 @@ def submit_response(
         question_id = str(question.get("question_id"))
         selected = submitted_by_question[question_id]
         canonical = normalize_object_id(selected.course_id)
-        if course_map[canonical].get("semester") != semester:
+        course_semester = course_map[canonical].get("semester")
+        # Courses with no fixed semester (most electives) suit any semester.
+        if course_semester is not None and course_semester != semester:
             raise HTTPException(
                 status_code=HTTP_422,
                 detail=(
@@ -253,22 +311,9 @@ def submit_response(
                 ),
             )
 
-    submitted_at = utcnow()
-    document = {
-        "_id": ObjectId(),
-        "form_id": form["_id"],
-        "faculty_name": payload.faculty_name,
-        "faculty_id": payload.faculty_id,
-        "answers": answer_documents,
-        "submitted_at": submitted_at,
-    }
-    try:
-        db.responses.insert_one(document)
-    except PyMongoError as exc:
-        raise _server_error("Could not submit preferences.", "saving a response") from exc
-
+    saved = _save_response(db, form["_id"], payload, answer_documents)
     return {
         "message": "Course preferences submitted successfully",
-        "response_id": str(document["_id"]),
-        "submitted_at": iso_utc(submitted_at),
+        "response_id": str(saved["_id"]),
+        "submitted_at": iso_utc(saved["submitted_at"]),
     }

@@ -1,6 +1,8 @@
-"""Course catalogue: API contract, semester filter, and seed data (Member 2 integration)."""
+"""Course catalogue: API contract, semester filter, and regulation seed data."""
 
 from __future__ import annotations
+
+from collections import Counter
 
 import pytest
 from bson import ObjectId
@@ -9,7 +11,8 @@ from pymongo.errors import ServerSelectionTimeoutError
 from app import seed as seed_module
 from app.database import get_database
 from app.main import app
-from tests.utils import insert_course
+from app.regulation import AIML, CSE, REGULATION_COURSES
+from tests.utils import insert_course, insert_form, question_doc
 
 
 def test_course_fields_and_id_serialization(client, db, admin_headers):
@@ -25,6 +28,12 @@ def test_course_fields_and_id_serialization(client, db, admin_headers):
                 "course_code": "23N501",
                 "course_name": "Machine Learning",
                 "semester": 5,
+                "category": None,
+                "credits": None,
+                "elective_group": None,
+                "offered_by": None,
+                "source": None,
+                "programmes": [],
             }
         ]
     }
@@ -73,7 +82,14 @@ class _UnreachableCollection:
         raise ServerSelectionTimeoutError("down")
 
 
+class _NoStoredPassword:
+    def find_one(self, *args, **kwargs):
+        return None
+
+
 class _UnreachableDatabase:
+    # The token check reads admin_credentials; only courses is unreachable.
+    admin_credentials = _NoStoredPassword()
     courses = _UnreachableCollection()
 
 
@@ -94,15 +110,88 @@ def seed_db(db, monkeypatch):
     return db
 
 
-def test_seed_loads_member2_courses_and_is_repeatable(seed_db, capsys):
+def test_seed_loads_regulation_courses_and_is_repeatable(seed_db):
     seed_module.seed()
     seed_module.seed()
 
-    expected = len(seed_module.COURSES) + len(seed_module.MEMBER2_COURSES)
-    assert seed_db.courses.count_documents({}) == expected
-    assert seed_db.forms.count_documents({}) == 1
+    assert seed_db.courses.count_documents({}) == len(REGULATION_COURSES)
+    assert seed_db.forms.count_documents({}) == 0  # the seed never creates forms
     course = seed_db.courses.find_one({"code": "23N501"})
-    assert (course["name"], course["semester"]) == ("Machine Learning", 5)
+    assert (course["name"], course["semester"], course["category"]) == (
+        "Machine Learning -2",
+        5,
+        "PC",
+    )
+    assert (course["credits"], course["regulation"], course["source"]) == (
+        4,
+        "2023",
+        "regulation",
+    )
+    assert course["programmes"] == [AIML]
+
+
+def test_courses_both_programmes_teach_identically_share_one_record(seed_db):
+    seed_module.seed()
+
+    shared = seed_db.courses.find_one({"code": "23Z402/23N402"})
+    assert (shared["name"], shared["semester"], shared["credits"]) == (
+        "Database Management Systems",
+        4,
+        3,
+    )
+    assert shared["codes"] == ["23Z402", "23N402"]
+    assert shared["programmes"] == [CSE, AIML]
+    # Same code in both programmes: no joined code.
+    assert seed_db.courses.find_one({"code": "23G105"})["programmes"] == [CSE, AIML]
+    # Electives may be numbered differently in each programme.
+    assert seed_db.courses.find_one({"code": "23Z017/23N020"})["name"] == "Generative AI"
+    assert seed_db.courses.count_documents({"codes": "23N402"}) == 1
+
+
+def test_same_name_with_different_semester_or_credits_stays_separate(seed_db):
+    seed_module.seed()
+
+    cse = seed_db.courses.find_one({"code": "23Z501"})
+    aiml = seed_db.courses.find_one({"code": "23N404"})
+    assert cse["name"] == aiml["name"] == "Operating Systems"
+    assert (cse["semester"], cse["credits"], cse["programmes"]) == (5, 3, [CSE])
+    assert (aiml["semester"], aiml["credits"], aiml["programmes"]) == (4, 4, [AIML])
+
+
+def test_regulation_electives_have_no_fixed_semester(seed_db):
+    seed_module.seed()
+
+    elective = seed_db.courses.find_one({"code": "23Z017/23N020"})
+    assert (elective["name"], elective["category"], elective["semester"]) == (
+        "Generative AI",
+        "PE",
+        None,
+    )
+    # 23ZO01-04 are shared; 23NO03 and 23NO04 are AI&ML only.
+    assert seed_db.courses.count_documents({"category": "OE"}) == 6
+    assert seed_db.courses.find_one({"code": "23IP15"}) is None
+
+
+@pytest.mark.parametrize(
+    "programme, expected",
+    [
+        (CSE, {"HS": 10, "BS": 29, "ES": 28, "PC": 58, "EEC": 15, "MC": 0}),
+        (AIML, {"HS": 10, "BS": 29, "ES": 26, "PC": 60, "EEC": 15, "MC": 0}),
+    ],
+)
+def test_regulation_core_credits_match_the_credit_summary(programme, expected):
+    totals = Counter()
+    for course in REGULATION_COURSES:
+        if course["elective_group"] is None and programme in course["programmes"]:
+            totals[course["category"]] += course["credits"]
+    # Each regulation's "Summary of Credit Distribution", less the one
+    # two-credit language elective slot in Semester II.
+    assert totals == expected
+
+
+def test_regulation_codes_are_unique():
+    codes = [code for course in REGULATION_COURSES for code in course["codes"]]
+    assert len(codes) == len(set(codes))
 
 
 def test_seed_migrates_member2_legacy_records_in_place(seed_db):
@@ -113,8 +202,68 @@ def test_seed_migrates_member2_legacy_records_in_place(seed_db):
     seed_module.seed()
 
     migrated = seed_db.courses.find_one({"_id": legacy_id})
-    assert (migrated["code"], migrated["name"]) == ("23N501", "Machine Learning")
+    assert (migrated["code"], migrated["name"]) == ("23N501", "Machine Learning -2")
     assert seed_db.courses.count_documents({"$or": [{"code": "23N501"}, {"course_code": "23N501"}]}) == 1
+
+
+def test_seed_joins_codes_on_earlier_single_programme_records(seed_db):
+    # Seeded before CSE courses were added; a form already uses it.
+    earlier = seed_db.courses.insert_one(
+        {
+            "code": "23N402",
+            "name": "Database Management Systems",
+            "semester": 4,
+            "programme": AIML,
+            "source": "regulation",
+        }
+    ).inserted_id
+    insert_form(seed_db, questions=[question_doc("q1", [earlier])])
+
+    seed_module.seed()
+
+    updated = seed_db.courses.find_one({"_id": earlier})
+    assert updated["code"] == "23Z402/23N402"
+    assert updated["programmes"] == [CSE, AIML]
+    assert "programme" not in updated
+    assert seed_db.courses.count_documents({"codes": "23Z402"}) == 1
+
+
+def test_seed_keeps_legacy_courses_unless_pruning(seed_db, capsys):
+    unused = insert_course(seed_db, "CS101", "Introduction to Programming", 1)
+    used = insert_course(seed_db, "CS301", "Database Systems", 3)
+    insert_form(seed_db, questions=[question_doc("q1", [used])])
+
+    seed_module.seed()
+    assert "CS101, CS301" in capsys.readouterr().out
+    assert seed_db.courses.find_one({"_id": unused}) is not None
+
+    seed_module.seed(prune_legacy=True)
+    output = capsys.readouterr().out
+    assert seed_db.courses.find_one({"_id": unused}) is None
+    assert seed_db.courses.find_one({"_id": used}) is not None
+    assert "Deleted unused pre-regulation courses: CS101" in output
+    assert "still used by a form: CS301" in output
+
+
+def test_seed_never_prunes_manual_open_electives(seed_db):
+    manual = seed_db.courses.insert_one(
+        {"code": "23MO01", "name": "Manual OE", "category": "OE", "source": "manual"}
+    ).inserted_id
+
+    seed_module.seed(prune_legacy=True)
+
+    assert seed_db.courses.find_one({"_id": manual}) is not None
+
+
+def test_seed_never_takes_over_a_manual_course_with_a_regulation_code(seed_db):
+    manual = seed_db.courses.insert_one(
+        {"code": "23ZO01", "name": "Added by hand", "category": "OE", "source": "manual"}
+    ).inserted_id
+
+    seed_module.seed()
+
+    assert seed_db.courses.find_one({"_id": manual})["name"] == "Added by hand"
+    assert seed_db.courses.find_one({"code": "23ZO01/23NO01"}) is not None
 
 
 def test_seed_refuses_with_member2_unique_index(seed_db):
