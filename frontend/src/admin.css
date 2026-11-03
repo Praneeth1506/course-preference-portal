@@ -66,6 +66,16 @@ html:has(.full-page-loading) {
   padding-left: 1.2rem;
 }
 
+.alert-warning {
+  background: #fffaeb;
+  border-color: #fedf89;
+  color: #93370d;
+}
+
+.answer-removed {
+  font-weight: 400;
+}
+
 .picker-head {
   display: flex;
   flex-wrap: wrap;
@@ -186,7 +196,8 @@ html:has(.full-page-loading) {
 }
 
 /* facultyForm.css styles .btn-primary at full width for every page. */
-.elective-form .actions .btn {
+.elective-form .actions .btn,
+.sticky-actions .actions .btn {
   width: auto;
 }
 

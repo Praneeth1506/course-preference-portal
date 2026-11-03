@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from bson import ObjectId
 
 from app.routers import forms as forms_router
 from tests.utils import (
     create_form,
+    form_payload,
     insert_course,
     insert_form,
     publish_form,
@@ -271,7 +273,49 @@ def test_repeated_publish_is_idempotent(client, db, admin_headers):
     assert db.forms.count_documents({"public_token": first["public_token"]}) == 1
 
 
-def test_published_form_cannot_be_edited(client, db, admin_headers):
+def test_published_form_can_be_edited_and_keeps_its_link(client, db, admin_headers):
+    first, second, third = (insert_course(db, code) for code in ("CS101", "CS102", "CS103"))
+    form = create_form(
+        client,
+        admin_headers,
+        questions=[question_doc("q1", [first, second])],
+    )
+    published = publish_form(client, admin_headers, form["form_id"])
+
+    response = client.put(
+        f"/api/forms/{form['form_id']}",
+        headers=admin_headers,
+        json=form_payload(
+            "Changed",
+            [
+                question_doc("q1", [first, third]),
+                question_doc(None, [second, third], text="Second choice"),
+            ],
+        ),
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "published"
+    assert body["public_token"] == published["public_token"]
+    assert [q["question_id"] for q in body["questions"]] == ["q1", "q2"]
+    assert body["questions"][0]["course_ids"] == [str(first), str(third)]
+
+    public = client.get(f"/api/public/forms/{published['public_token']}")
+    assert public.status_code == 200
+    assert public.json()["title"] == "Changed"
+    assert len(public.json()["questions"]) == 2
+
+
+@pytest.mark.parametrize(
+    "questions, message",
+    [
+        ([], "at least one question"),
+        ([question_doc("q1", [])], "at least one course"),
+    ],
+)
+def test_published_form_edit_must_stay_publishable(
+    client, db, admin_headers, questions, message
+):
     course = insert_course(db, "CS101")
     form = create_form(
         client,
@@ -283,11 +327,110 @@ def test_published_form_cannot_be_edited(client, db, admin_headers):
     response = client.put(
         f"/api/forms/{form['form_id']}",
         headers=admin_headers,
-        json={"title": "Changed", "questions": []},
+        json=form_payload("Changed", questions),
     )
-    assert response.status_code == 409
+    assert response.status_code == 422
+    assert message in response.json()["detail"]
     stored = db.forms.find_one({"_id": ObjectId(form["form_id"])})
     assert stored["title"] == "Test Form"
+    assert len(stored["questions"]) == 1
+
+
+def test_published_form_edit_needs_a_distinct_course_per_question(
+    client, db, admin_headers
+):
+    course = insert_course(db, "CS101")
+    form = create_form(
+        client,
+        admin_headers,
+        questions=[question_doc("q1", [course])],
+    )
+    publish_form(client, admin_headers, form["form_id"])
+
+    response = client.put(
+        f"/api/forms/{form['form_id']}",
+        headers=admin_headers,
+        json=form_payload(
+            "Test Form",
+            [question_doc("q1", [course]), question_doc(None, [course])],
+        ),
+    )
+    assert response.status_code == 422
+    assert "different course" in response.json()["detail"]
+
+
+def test_new_question_never_reuses_a_removed_answered_question_id(
+    client, db, admin_headers
+):
+    first, second, third = (insert_course(db, code) for code in ("CS101", "CS102", "CS103"))
+    form = create_form(
+        client,
+        admin_headers,
+        questions=[question_doc("q1", [first]), question_doc("q2", [second])],
+    )
+    token = publish_form(client, admin_headers, form["form_id"])["public_token"]
+    submitted = client.post(
+        f"/api/public/forms/{token}/responses",
+        json={
+            "faculty_name": "Dr. A",
+            "faculty_id": "F1",
+            "answers": [
+                {"question_id": "q1", "course_id": str(first)},
+                {"question_id": "q2", "course_id": str(second)},
+            ],
+        },
+    )
+    assert submitted.status_code == 201, submitted.text
+
+    # Drop q2 and add a new question: it must not become q2 again.
+    response = client.put(
+        f"/api/forms/{form['form_id']}",
+        headers=admin_headers,
+        json=form_payload(
+            "Test Form",
+            [question_doc("q1", [first]), question_doc(None, [third])],
+        ),
+    )
+    assert response.status_code == 200, response.text
+    assert [q["question_id"] for q in response.json()["questions"]] == ["q1", "q3"]
+
+    listing = client.get(
+        f"/api/forms/{form['form_id']}/responses", headers=admin_headers
+    ).json()
+    answers = {a["question_id"]: a for a in listing["responses"][0]["answers"]}
+    assert answers["q1"]["question_removed"] is False
+    assert answers["q2"]["question_removed"] is True
+    assert answers["q2"]["question_text"] == "Question q2"
+    assert answers["q2"]["course_code"] == "CS102"
+
+
+def test_submitting_an_outdated_form_asks_faculty_to_reload(client, db, admin_headers):
+    first, second = insert_course(db, "CS101"), insert_course(db, "CS102")
+    form = create_form(
+        client,
+        admin_headers,
+        questions=[question_doc("q1", [first])],
+    )
+    token = publish_form(client, admin_headers, form["form_id"])["public_token"]
+    client.put(
+        f"/api/forms/{form['form_id']}",
+        headers=admin_headers,
+        json=form_payload(
+            "Test Form",
+            [question_doc("q1", [first]), question_doc(None, [second])],
+        ),
+    )
+
+    response = client.post(
+        f"/api/public/forms/{token}/responses",
+        json={
+            "faculty_name": "Dr. A",
+            "faculty_id": "F1",
+            "answers": [{"question_id": "q1", "course_id": str(first)}],
+        },
+    )
+    assert response.status_code == 422
+    assert "reload the page" in response.json()["detail"]
 
 
 def test_public_tokens_are_unique_and_collision_safe(

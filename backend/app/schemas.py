@@ -86,7 +86,10 @@ class FormCreate(BaseModel):
 
 
 class FormUpdate(FormCreate):
-    """A full replacement of a draft's editable fields."""
+    """A full replacement of a form's editable fields.
+
+    Published forms keep their token, and their edits must stay publishable.
+    """
 
 
 class LoginRequest(BaseModel):

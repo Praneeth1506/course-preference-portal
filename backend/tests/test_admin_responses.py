@@ -106,6 +106,7 @@ def test_authenticated_admin_sees_submitted_response_with_course_details(
         {
             "question_id": "q1",
             "question_text": "Teaching preference A",
+            "question_removed": False,
             "course_id": str(first),
             "course_code": "CS301",
             "course_name": "Database Systems",
@@ -114,6 +115,7 @@ def test_authenticated_admin_sees_submitted_response_with_course_details(
         {
             "question_id": "q2",
             "question_text": "Teaching preference B",
+            "question_removed": False,
             "course_id": str(second),
             "course_code": "CS401",
             "course_name": "Machine Learning",

@@ -76,7 +76,7 @@ export default function ResponsesPage() {
               className="btn btn-secondary"
               to={`/admin/forms/${formId}/edit`}
             >
-              View form
+              View or edit form
             </Link>
           ) : null}
           {publicUrl ? <CopyLinkButton url={publicUrl} /> : null}
@@ -136,6 +136,12 @@ export default function ResponsesPage() {
                   >
                     <div className="answer-question">
                       {answer.question_text || answer.question_id}
+                      {answer.question_removed ? (
+                        <span className="muted small answer-removed">
+                          {" "}
+                          (removed from the form)
+                        </span>
+                      ) : null}
                     </div>
                     <div className="answer-course">
                       {answer.course_code ? (

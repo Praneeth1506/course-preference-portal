@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import {
   ErrorBanner,
@@ -44,6 +44,18 @@ function makeKey() {
   return `${Date.now()}-${Math.random()}`;
 }
 
+function editorQuestions(form) {
+  return (form.questions || []).map((question) => ({
+    key: makeKey(),
+    question_id: question.question_id,
+    text: question.text || "",
+    course_ids: Array.isArray(question.course_ids)
+      ? [...question.course_ids]
+      : [],
+    semester: question.semester ?? null,
+  }));
+}
+
 function newQuestion() {
   return {
     key: makeKey(),
@@ -68,6 +80,7 @@ function courseTag(course) {
 export default function FormBuilderPage() {
   const { formId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const isNew = !formId;
 
   const [title, setTitle] = useState("");
@@ -78,6 +91,10 @@ export default function FormBuilderPage() {
   const [coursesLoading, setCoursesLoading] = useState(true);
   const [form, setForm] = useState(null);
   const [published, setPublished] = useState(null);
+  // A published form opens read-only; "Edit form" switches to the editor.
+  const [editingPublished, setEditingPublished] = useState(
+    Boolean(location.state?.editPublished),
+  );
   const [loading, setLoading] = useState(!isNew);
   const [loadError, setLoadError] = useState("");
   const [coursesError, setCoursesError] = useState("");
@@ -109,6 +126,17 @@ export default function FormBuilderPage() {
     };
   }, []);
 
+  const loadEditor = (data) => {
+    const loaded = editorQuestions(data);
+    setTitle(data.title || "");
+    setDescription(data.description || "");
+    setQuestions(loaded.length > 0 ? loaded : [newQuestion()]);
+    setCountInput(String(Math.max(loaded.length, MIN_QUESTIONS)));
+    setQuestionNotices({});
+    setPickerFilters({});
+    setShowIssues(false);
+  };
+
   useEffect(() => {
     if (!formId) {
       setLoading(false);
@@ -123,19 +151,7 @@ export default function FormBuilderPage() {
       .then((data) => {
         if (!active) return;
         setForm(data);
-        setTitle(data.title || "");
-        setDescription(data.description || "");
-        const loaded = (data.questions || []).map((question) => ({
-          key: makeKey(),
-          question_id: question.question_id,
-          text: question.text || "",
-          course_ids: Array.isArray(question.course_ids)
-            ? [...question.course_ids]
-            : [],
-          semester: question.semester ?? null,
-        }));
-        setQuestions(loaded.length > 0 ? loaded : [newQuestion()]);
-        setCountInput(String(Math.max(loaded.length, MIN_QUESTIONS)));
+        loadEditor(data);
         if (data.status === "published") {
           setPublished({
             form_id: data.form_id,
@@ -242,6 +258,15 @@ export default function FormBuilderPage() {
   const handleRemoveQuestion = (index) => {
     if (questions.length <= MIN_QUESTIONS) return;
     const removedText = questions[index]?.text || defaultQuestionText(index);
+    if (
+      editingPublished &&
+      questions[index]?.question_id &&
+      !window.confirm(
+        `Remove "${removedText}" from the published form? Answers already submitted for it stay in the responses.`,
+      )
+    ) {
+      return;
+    }
     replaceQuestions(removeQuestion(questions, index));
     setNotice(`Removed ${removedText}.`);
   };
@@ -342,6 +367,49 @@ export default function FormBuilderPage() {
     }
   };
 
+  const handleSaveChanges = async () => {
+    if (busy || !checkReady()) return;
+    setSaving(true);
+    try {
+      const saved = await persist();
+      loadEditor(saved);
+      setEditingPublished(false);
+      setPreviewing(false);
+      setNotice(
+        "Changes saved. Faculty see them the next time they open the form; the link is unchanged.",
+      );
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEditPublished = () => {
+    if (form) loadEditor(form);
+    setError("");
+    setNotice("");
+    setEditingPublished(true);
+  };
+
+  const handleCancelEdit = () => {
+    const unchanged =
+      JSON.stringify(buildFormPayload({ title, description, questions })) ===
+      JSON.stringify(
+        buildFormPayload({
+          title: form?.title || "",
+          description: form?.description || "",
+          questions: editorQuestions(form || {}),
+        }),
+      );
+    if (!unchanged && !window.confirm("Discard your unsaved changes?")) return;
+    if (form) loadEditor(form);
+    setError("");
+    setNotice("");
+    setPreviewing(false);
+    setEditingPublished(false);
+  };
+
   const handlePublish = async () => {
     if (busy || !checkReady()) return;
     setPublishing(true);
@@ -378,7 +446,7 @@ export default function FormBuilderPage() {
 
   const isPublished = Boolean(published) || form?.status === "published";
 
-  if (isPublished) {
+  if (isPublished && !editingPublished) {
     const publicUrl = published?.public_url || publicUrlForForm(form);
     const displayQuestions = form?.questions || [];
     const activeFormId = formId || published?.form_id;
@@ -394,13 +462,19 @@ export default function FormBuilderPage() {
               <h1 className="page-title">{form?.title || title}</h1>
               <StatusBadge status="published" />
             </div>
-            <p className="muted">
-              {form?.description ||
-                description ||
-                "This form is published and cannot be edited."}
-            </p>
+            {form?.description ? (
+              <p className="muted">{form.description}</p>
+            ) : null}
           </div>
           <div className="actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              data-testid="btn-edit-published"
+              onClick={handleEditPublished}
+            >
+              Edit form
+            </button>
             <Link
               className="btn btn-primary"
               to={`/admin/forms/${activeFormId}/responses`}
@@ -461,9 +535,11 @@ export default function FormBuilderPage() {
     <div className="sticky-actions">
       <div className="sticky-actions-inner">
         <p className="muted small">
-          {issues.length === 0
-            ? "Ready to save or publish."
-            : `${issues.length} item(s) need attention before saving.`}
+          {issues.length > 0
+            ? `${issues.length} item(s) need attention before saving.`
+            : isPublished
+              ? "Saved changes go live on the existing link."
+              : "Ready to save or publish."}
         </p>
         <div className="actions">
           <button
@@ -474,22 +550,46 @@ export default function FormBuilderPage() {
           >
             {previewing ? "Back to editing" : "Preview"}
           </button>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={handleSave}
-            disabled={busy}
-          >
-            {saving ? "Saving…" : "Save draft"}
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handlePublish}
-            disabled={busy}
-          >
-            {publishing ? "Publishing…" : "Publish form"}
-          </button>
+          {isPublished ? (
+            <>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleCancelEdit}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                data-testid="btn-save-published"
+                onClick={handleSaveChanges}
+                disabled={busy}
+              >
+                {saving ? "Saving…" : "Save changes"}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleSave}
+                disabled={busy}
+              >
+                {saving ? "Saving…" : "Save draft"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handlePublish}
+                disabled={busy}
+              >
+                {publishing ? "Publishing…" : "Publish form"}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -519,13 +619,13 @@ export default function FormBuilderPage() {
       <div>
         <div className="page-header">
           <div>
-            <p className="muted small">Preview — not saved yet</p>
+            <p className="muted small">Preview — changes not saved yet</p>
             <h1 className="page-title">{title.trim() || "Untitled form"}</h1>
             {description.trim() ? (
               <p className="muted">{description.trim()}</p>
             ) : null}
           </div>
-          <StatusBadge status="draft" />
+          <StatusBadge status={isPublished ? "published" : "draft"} />
         </div>
 
         <ErrorBanner error={error} />
@@ -578,15 +678,28 @@ export default function FormBuilderPage() {
             ← All forms
           </Link>
           <h1 className="page-title">
-            {isNew ? "New form" : "Edit draft form"}
+            {isNew
+              ? "New form"
+              : isPublished
+                ? "Edit published form"
+                : "Edit draft form"}
           </h1>
           <p className="muted">
-            Set the number of questions, choose the courses faculty can pick
-            for each, preview, then save or publish.
+            {isPublished
+              ? "Add or remove questions and courses, then save. The share link stays the same."
+              : "Set the number of questions, choose the courses faculty can pick for each, preview, then save or publish."}
           </p>
         </div>
-        <StatusBadge status="draft" />
+        <StatusBadge status={isPublished ? "published" : "draft"} />
       </div>
+
+      {isPublished ? (
+        <div className="alert alert-warning" role="note">
+          This form is live. Saved changes apply to everyone who opens the
+          link from then on. Responses already submitted are kept as they are,
+          and those faculty cannot submit again.
+        </div>
+      ) : null}
 
       <ErrorBanner error={error} />
       <Notice>{notice}</Notice>

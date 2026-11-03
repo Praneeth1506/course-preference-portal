@@ -47,9 +47,16 @@ def _server_error(detail: str, action: str) -> HTTPException:
     )
 
 
-def _build_question_docs(inputs: list[QuestionInput]) -> list[dict[str, Any]]:
-    """Normalize question IDs and order, storing course IDs as ObjectIds."""
+def _build_question_docs(
+    inputs: list[QuestionInput], reserved_ids: set[str] | None = None
+) -> list[dict[str, Any]]:
+    """Normalize question IDs and order, storing course IDs as ObjectIds.
+
+    New questions never take an ID in ``reserved_ids``, so a question added to
+    a published form cannot inherit the answers of one that was removed.
+    """
     used_ids: set[str] = {q.question_id for q in inputs if q.question_id}
+    used_ids |= reserved_ids or set()
     docs: list[dict[str, Any]] = []
 
     for index, question in enumerate(inputs):
@@ -319,6 +326,37 @@ def _unanswerable_question(
     return None
 
 
+def _removed_questions(
+    form: dict[str, Any], new_questions: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Questions dropped from a published form, kept to label earlier answers."""
+    kept = {question["question_id"] for question in new_questions}
+    removed = {
+        question["question_id"]: question
+        for question in form.get("removed_questions") or []
+        if question.get("question_id") not in kept
+    }
+    for question in form.get("questions") or []:
+        question_id = question.get("question_id")
+        if question_id and question_id not in kept:
+            removed[question_id] = {
+                "question_id": question_id,
+                "text": question.get("text", ""),
+            }
+    return list(removed.values())
+
+
+def _used_question_ids(db: Database, form: dict[str, Any]) -> set[str]:
+    """Question IDs the form has had or that responses have answered."""
+    ids = {
+        str(question.get("question_id"))
+        for question in [*(form.get("questions") or []), *(form.get("removed_questions") or [])]
+        if question.get("question_id")
+    }
+    answered = db.responses.distinct("answers.question_id", {"form_id": form["_id"]})
+    return ids | {str(question_id) for question_id in answered if question_id}
+
+
 def _generate_public_token() -> str:
     """256+ bits of cryptographically secure randomness, URL-safe."""
     return secrets.token_urlsafe(settings.public_token_bytes)
@@ -490,18 +528,23 @@ def update_form(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Form not found."
         )
-    if form.get("status") == "published":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Published forms cannot be edited.",
-        )
+    is_published = form.get("status") == "published"
+    try:
+        reserved_ids = _used_question_ids(db, form) if is_published else set()
+    except PyMongoError as exc:
+        raise _server_error("Could not update the form.", "loading answered questions") from exc
 
     updates = {
         "title": payload.title,
         "description": payload.description,
-        "questions": _build_question_docs(payload.questions),
+        "questions": _build_question_docs(payload.questions, reserved_ids),
         "updated_at": utcnow(),
     }
+    # A published form is live, so its edits must stay publishable. The token
+    # and link are kept, and earlier responses stay as they were submitted.
+    if is_published:
+        _validate_publishable(db, {**form, **updates})
+        updates["removed_questions"] = _removed_questions(form, updates["questions"])
     try:
         db.forms.update_one({"_id": object_id}, {"$set": updates})
     except PyMongoError as exc:
@@ -564,7 +607,7 @@ def list_responses(
     }
     question_text = {
         question.get("question_id"): question.get("text", "")
-        for question in questions
+        for question in [*(form.get("removed_questions") or []), *questions]
     }
 
     try:
@@ -609,6 +652,8 @@ def list_responses(
                 {
                     "question_id": question_id,
                     "question_text": question_text.get(question_id),
+                    # Answered before the question was removed from the form.
+                    "question_removed": question_id not in question_order,
                     "course_id": canonical,
                     "course_code": course.get("code") if course else None,
                     "course_name": course.get("name") if course else None,

@@ -190,6 +190,8 @@ def submit_response(
     """
     form = _find_published_form(db, token)
     questions = _ordered_questions(form.get("questions") or [])
+    # Admins can edit a published form while faculty have it open.
+    reload_hint = " The form may have changed since you opened it; reload the page."
     if not questions:
         raise HTTPException(
             status_code=HTTP_422,
@@ -214,14 +216,14 @@ def submit_response(
     if unexpected:
         raise HTTPException(
             status_code=HTTP_422,
-            detail=f"Unexpected question answer: {unexpected[0]}.",
+            detail=f"Unexpected question answer: {unexpected[0]}." + reload_hint,
         )
 
     missing = [qid for qid in expected_ids if qid not in submitted_set]
     if missing:
         raise HTTPException(
             status_code=HTTP_422,
-            detail=f"Missing answer for question {missing[0]}.",
+            detail=f"Missing answer for question {missing[0]}." + reload_hint,
         )
 
     selected_course_ids: set[str] = set()
@@ -250,7 +252,7 @@ def submit_response(
                 status_code=HTTP_422,
                 detail=(
                     f"The selected course is not available for question "
-                    f"{question_id}."
+                    f"{question_id}.{reload_hint}"
                 ),
             )
 

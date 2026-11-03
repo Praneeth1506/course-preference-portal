@@ -245,7 +245,7 @@ an absolute URL instead, local development origins on any port for
 | POST   | `/api/forms`                      | Admin       | Create a draft form              |
 | GET    | `/api/forms`                      | Admin       | List forms with response counts  |
 | GET    | `/api/forms/{id}`                 | Admin       | Load a form for editing          |
-| PUT    | `/api/forms/{id}`                 | Admin       | Update a draft (409 if published)|
+| PUT    | `/api/forms/{id}`                 | Admin       | Update a draft or published form |
 | POST   | `/api/forms/{id}/publish`         | Admin       | Publish and return public link   |
 | GET    | `/api/forms/{id}/responses`       | Admin       | List responses, newest first     |
 | GET    | `/api/public/forms/{token}`       | Public      | Retrieve a published form        |
@@ -272,9 +272,24 @@ It then stores a cryptographically random token and returns:
 
 Tokens are generated with `secrets.token_urlsafe(32)` (256 bits). The MongoDB
 document ID is never used as a token. Re-publishing an already published form
-returns the same token so existing links keep working. Published forms cannot
-be edited. A partial unique index protects `public_token`, and the publish flow
-also checks for collisions and retries safely.
+returns the same token so existing links keep working. A partial unique index
+protects `public_token`, and the publish flow also checks for collisions and
+retries safely.
+
+### Editing a published form
+
+Open a published form and choose **Edit form** (also on the forms list) to add
+or remove questions and courses. **Save changes** sends the same
+`PUT /api/forms/{id}`; for a published form it is checked like a publish
+(HTTP 422 if it would not be publishable) and the token and link stay the same.
+
+- Responses already submitted are kept as they were, and those faculty still
+  cannot submit again.
+- A removed question is remembered in `removed_questions`, so its earlier
+  answers stay labelled in the responses list (`question_removed: true`).
+- A new question never reuses the ID of a removed or answered question.
+- Faculty who opened the form before the change get a 422 asking them to
+  reload the page.
 
 ### Public form retrieval
 
@@ -401,7 +416,7 @@ An empty form returns `"responses": []` and `"total": 0`.
 | 400    | Malformed MongoDB ObjectId in a path; wrong current password when changing it |
 | 401    | Missing/expired/invalid admin token, or one issued before the last password change |
 | 404    | Form, public token, or published form not found                     |
-| 409    | Editing a published form; a faculty ID submitting a form again; duplicate course code; changing a regulation course, or a used open elective |
+| 409    | A faculty ID submitting a form again; duplicate course code; changing a regulation course, or a used open elective |
 | 422    | Invalid form schema, publish state, or submitted response            |
 | 500    | Unexpected/database error (safe external message, details logged)    |
 | 503    | Sign-in or the course list while MongoDB is unreachable              |
@@ -429,6 +444,7 @@ forms:     {
                question_id, text, order,
                course_ids: [ObjectId], semester: number | null
              }],
+             removed_questions?: [{ question_id, text }],
              created_at, updated_at, published_at?
            }
 responses: {
@@ -531,7 +547,9 @@ reachable over HTTPS, since browsers block an HTTPS page calling an HTTP API.
   open electives can be added or edited there. Regulation changes go in
   `backend/app/regulation.py`. Self-directed learning courses (23IC01, 23IC02),
   the Induction Programme and the Activity Point Programme are not loaded.
-- Published forms are immutable. Editing would invalidate existing submissions.
+- Editing a published form does not change responses already submitted; their
+  answers to removed questions are listed as removed, and they have no answer
+  for questions added later.
 - A submitted response cannot be changed by the faculty member; a second
   submission with the same faculty ID is rejected (see above).
 - The public token is stored as-is in MongoDB because it is a capability URL;

@@ -92,6 +92,13 @@ export default function FormsPage() {
                   <div className="actions">
                     {isPublished ? (
                       <>
+                        <Link
+                          className="btn btn-secondary"
+                          to={`/admin/forms/${form.form_id}/edit`}
+                          state={{ editPublished: true }}
+                        >
+                          Edit form
+                        </Link>
                         {url ? <CopyLinkButton url={url} /> : null}
                         {url ? (
                           <a
