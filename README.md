@@ -142,7 +142,8 @@ cp .env.example .env
 npm run dev
 ```
 
-Open <http://localhost:5173>.
+Open <http://localhost:5173>; it goes to the admin sign-in page. Faculty open
+the share link of a published form (`/forms/<token>`), or `/forms` to paste one.
 
 The backend refuses to start until `JWT_SECRET` (32+ characters) and an admin
 password (`ADMIN_PASSWORD_HASH`, or `ADMIN_PASSWORD` for local use only) are

@@ -92,8 +92,12 @@ function FacultyPage() {
 export default function App() {
   return (
     <Routes>
-      {/* Faculty-facing form (Member 4); reads the token from the URL itself. */}
-      <Route path="/" element={<FacultyPage />} />
+      {/* The site opens on admin sign-in; LoginPage sends signed-in admins on to /admin/forms. */}
+      <Route path="/" element={<Navigate to="/login" replace />} />
+
+      {/* Faculty-facing form (Member 4); reads the token from the URL itself.
+          /forms without a token asks for the share link or token. */}
+      <Route path="/forms" element={<FacultyPage />} />
       <Route path="/forms/:token" element={<FacultyPage />} />
 
       <Route path="/login" element={<LoginPage />} />
