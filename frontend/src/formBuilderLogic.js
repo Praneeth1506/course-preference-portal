@@ -27,6 +27,18 @@ export function resizeQuestions(questions, count, createQuestion) {
   return [...questions, ...added];
 }
 
+/** Add one new preference question up to MAX_QUESTIONS. */
+export function addQuestion(questions, createQuestion) {
+  if (questions.length >= MAX_QUESTIONS) return questions;
+  return [...questions, createQuestion()];
+}
+
+/** Remove a preference question by index, down to MIN_QUESTIONS. */
+export function removeQuestion(questions, index) {
+  if (questions.length <= MIN_QUESTIONS) return questions;
+  return questions.filter((_, qIdx) => qIdx !== index);
+}
+
 /**
  * Select or unselect a course. A course may be offered in several questions;
  * faculty can still pick it for only one of them.
@@ -103,8 +115,28 @@ function anySemester(course) {
 
 /** Courses a question restricted to `semester` may offer: that semester's courses plus electives with no fixed semester. */
 export function coursesForSemester(courses, semester) {
-  if (semester === null || semester === undefined) return courses;
+  if (semester === null || semester === undefined || semester === "") return courses;
   return courses.filter((course) => anySemester(course) || course.semester === semester);
+}
+
+/**
+ * Add every course in `courses` that suits this question's semester to its
+ * selection. The builder passes the courses currently shown by its filters.
+ */
+export function selectAllEligibleCourses(questions, index, courses) {
+  return questions.map((question, questionIndex) => {
+    if (questionIndex !== index) return question;
+    const eligible = coursesForSemester(courses, question.semester).map((c) => c.course_id);
+    const added = eligible.filter((id) => !question.course_ids.includes(id));
+    return { ...question, course_ids: [...question.course_ids, ...added] };
+  });
+}
+
+/** Clear all course selections for a question. */
+export function clearQuestionCourses(questions, index) {
+  return questions.map((question, questionIndex) =>
+    questionIndex === index ? { ...question, course_ids: [] } : question,
+  );
 }
 
 export const COURSE_TYPES = [
@@ -194,8 +226,13 @@ export function semestersFromCourses(courses) {
  * from other semesters are dropped so they cannot be submitted by accident.
  */
 export function setQuestionSemester(questions, index, semester, courses) {
+  const normalizedSemester =
+    semester === null || semester === undefined || semester === ""
+      ? null
+      : Number(semester);
+
   const allowed = new Set(
-    coursesForSemester(courses, semester).map((course) => course.course_id),
+    coursesForSemester(courses, normalizedSemester).map((course) => course.course_id),
   );
   let removedCount = 0;
 
@@ -203,7 +240,7 @@ export function setQuestionSemester(questions, index, semester, courses) {
     if (questionIndex !== index) return question;
     const kept = question.course_ids.filter((id) => allowed.has(id));
     removedCount = question.course_ids.length - kept.length;
-    return { ...question, semester, course_ids: kept };
+    return { ...question, semester: normalizedSemester, course_ids: kept };
   });
 
   return { questions: next, removedCount };
@@ -230,8 +267,9 @@ export function validateBuilder({ title, questions, courses, coursesLoaded }) {
       errors.push(`${label}: select at least one course.`);
     }
 
+    if (!coursesLoaded) return;
+
     for (const courseId of question.course_ids) {
-      if (!coursesLoaded) continue;
       const course = courseById.get(courseId);
       if (!course) {
         errors.push(`${label}: remove a course that is no longer in the catalogue.`);

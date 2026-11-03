@@ -12,8 +12,10 @@ import {
   COURSE_TYPES,
   MAX_QUESTIONS,
   MIN_QUESTIONS,
+  addQuestion,
   buildFormPayload,
   clampQuestionCount,
+  clearQuestionCourses,
   courseGroups,
   coursesForSemester,
   defaultQuestionText,
@@ -21,7 +23,9 @@ import {
   programmeLabel,
   programmesFromCourses,
   removeCourse,
+  removeQuestion,
   resizeQuestions,
+  selectAllEligibleCourses,
   semestersFromCourses,
   setQuestionSemester,
   sharedCourses,
@@ -210,11 +214,12 @@ export default function FormBuilderPage() {
     const result = setQuestionSemester(questions, index, semester, courses);
     setQuestions(result.questions);
     const key = questions[index].key;
+    const semLabel = semester !== null ? `Semester ${semester}` : "All Semesters";
     setQuestionNotices((current) => ({
       ...current,
       [key]:
         result.removedCount > 0
-          ? `Removed ${result.removedCount} selected course(s) that are not in Semester ${semester}.`
+          ? `Cleared ${result.removedCount} course(s) that do not belong to ${semLabel}.`
           : "",
     }));
   };
@@ -224,6 +229,18 @@ export default function FormBuilderPage() {
       ...current,
       [key]: { ...NO_FILTER, ...current[key], ...changes },
     }));
+  };
+
+  const handleAddQuestion = () => {
+    replaceQuestions(addQuestion(questions, newQuestion));
+    setNotice("Added new preference question.");
+  };
+
+  const handleRemoveQuestion = (index) => {
+    if (questions.length <= MIN_QUESTIONS) return;
+    const removedText = questions[index]?.text || defaultQuestionText(index);
+    replaceQuestions(removeQuestion(questions, index));
+    setNotice(`Removed ${removedText}.`);
   };
 
   const moveQuestion = (index, direction) => {
@@ -354,7 +371,12 @@ export default function FormBuilderPage() {
                 <div className="question-head">
                   <span className="question-number">{index + 1}</span>
                   <div>
-                    <h3>{question.text}</h3>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                      <h3 style={{ margin: 0 }}>{question.text}</h3>
+                      <span className="chip" style={{ background: "#e0e7ff", color: "#1e3a8a", fontWeight: 600 }}>
+                        {question.semester ? `Semester ${question.semester}` : "All Semesters"}
+                      </span>
+                    </div>
                     <p className="muted small">
                       Question ID: <code>{question.question_id}</code>
                     </p>
@@ -463,7 +485,12 @@ export default function FormBuilderPage() {
               <div className="question-head">
                 <span className="question-number">{index + 1}</span>
                 <div>
-                  <h3>{question.text.trim() || defaultQuestionText(index)}</h3>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                    <h3 style={{ margin: 0 }}>{question.text.trim() || defaultQuestionText(index)}</h3>
+                    <span className="chip" style={{ background: "#e0e7ff", color: "#1e3a8a", fontWeight: 600 }}>
+                      {question.semester ? `Semester ${question.semester}` : "All Semesters"}
+                    </span>
+                  </div>
                   <p className="muted small">
                     {question.semester
                       ? `Semester ${question.semester} courses and electives`
@@ -554,8 +581,7 @@ export default function FormBuilderPage() {
             onBlur={handleCountBlur}
           />
           <p className="muted small">
-            Between {MIN_QUESTIONS} and {MAX_QUESTIONS}. Lowering the number
-            removes the last questions and their course selections.
+            Between {MIN_QUESTIONS} and {MAX_QUESTIONS}. Use the buttons below or change the number to resize.
           </p>
         </div>
       </section>
@@ -564,11 +590,13 @@ export default function FormBuilderPage() {
         <h2>Preference questions</h2>
         <button
           type="button"
+          id="btn-add-preference-question"
+          data-testid="btn-add-preference-question"
           className="btn btn-secondary"
-          onClick={() => replaceQuestions([...questions, newQuestion()])}
+          onClick={handleAddQuestion}
           disabled={questions.length >= MAX_QUESTIONS}
         >
-          + Add question
+          + Add Preference Question
         </button>
       </div>
 
@@ -654,16 +682,11 @@ export default function FormBuilderPage() {
                   <button
                     type="button"
                     className="btn btn-icon btn-danger-quiet"
-                    onClick={() =>
-                      replaceQuestions(
-                        questions.filter(
-                          (_, questionIndex) => questionIndex !== index,
-                        ),
-                      )
-                    }
+                    onClick={() => handleRemoveQuestion(index)}
                     disabled={questions.length <= MIN_QUESTIONS}
                     aria-label="Remove question"
                     title="Remove question"
+                    data-testid={`remove-question-${index}`}
                   >
                     ×
                   </button>
@@ -706,9 +729,29 @@ export default function FormBuilderPage() {
               <div className="field">
                 <div className="picker-head">
                   <span className="field-label">Available courses</span>
-                  <Link className="text-link small" to="/admin/open-electives">
-                    Manage open electives
-                  </Link>
+                  <div className="picker-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() =>
+                        setQuestions(selectAllEligibleCourses(questions, index, available))
+                      }
+                      disabled={available.length === 0}
+                    >
+                      Select all shown
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() => setQuestions(clearQuestionCourses(questions, index))}
+                      disabled={question.course_ids.length === 0}
+                    >
+                      Clear
+                    </button>
+                    <Link className="text-link small" to="/admin/open-electives">
+                      Manage open electives
+                    </Link>
+                  </div>
                 </div>
                 {!coursesLoading && courses.length > 0 ? (
                   <div className="picker-filters">
@@ -863,6 +906,17 @@ export default function FormBuilderPage() {
             </article>
           );
         })}
+
+        <div style={{ textAlign: "center", marginTop: "0.5rem" }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={handleAddQuestion}
+            disabled={questions.length >= MAX_QUESTIONS}
+          >
+            + Add Preference Question
+          </button>
+        </div>
       </div>
 
       {actionBar}

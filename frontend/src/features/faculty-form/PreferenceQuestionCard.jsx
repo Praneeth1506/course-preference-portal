@@ -22,6 +22,10 @@ export function PreferenceQuestionCard({
   disabled = false,
 }) {
   const preferenceLabel = `Preference ${questionIndex + 1}`;
+  const semesterLabel =
+    question.semester !== undefined && question.semester !== null
+      ? `Semester ${question.semester}`
+      : 'All Semesters';
   const hasCourses = !question.hasNoCourses && availableCourses.length > 0;
 
   return (
@@ -31,7 +35,12 @@ export function PreferenceQuestionCard({
     >
       <div className="preference-card-header">
         <div>
-          <span className="preference-badge">{preferenceLabel}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span className="preference-badge">{preferenceLabel}</span>
+            <span className="semester-badge" data-testid={`semester-badge-${question.id}`}>
+              {semesterLabel}
+            </span>
+          </div>
           <h3 className="question-title">{question.title}</h3>
         </div>
 
