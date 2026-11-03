@@ -132,6 +132,36 @@ export function selectAllEligibleCourses(questions, index, courses) {
   });
 }
 
+/**
+ * Give the question at `toIndex` the semester and courses of the question at
+ * `fromIndex`. The copy is independent: later changes to one leave the other alone.
+ */
+export function copyQuestionCourses(questions, fromIndex, toIndex) {
+  const source = questions[fromIndex];
+  if (!source || !questions[toIndex] || fromIndex === toIndex) return questions;
+  return questions.map((question, questionIndex) =>
+    questionIndex === toIndex
+      ? { ...question, semester: source.semester ?? null, course_ids: [...source.course_ids] }
+      : question,
+  );
+}
+
+/** Make every question after the first offer the first question's semester and courses. */
+export function copyFirstQuestionToAll(questions) {
+  return questions.reduce(
+    (next, _question, index) => (index === 0 ? next : copyQuestionCourses(next, 0, index)),
+    questions,
+  );
+}
+
+/** Whether two questions offer the same semester and the same courses (in any order). */
+export function sameCourses(first, second) {
+  if ((first.semester ?? null) !== (second.semester ?? null)) return false;
+  if (first.course_ids.length !== second.course_ids.length) return false;
+  const ids = new Set(first.course_ids);
+  return second.course_ids.every((id) => ids.has(id));
+}
+
 /** Clear all course selections for a question. */
 export function clearQuestionCourses(questions, index) {
   return questions.map((question, questionIndex) =>

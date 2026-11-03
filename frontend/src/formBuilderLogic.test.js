@@ -8,6 +8,8 @@ import {
   buildFormPayload,
   clampQuestionCount,
   clearQuestionCourses,
+  copyFirstQuestionToAll,
+  copyQuestionCourses,
   courseGroups,
   coursesForSemester,
   filterCourses,
@@ -15,6 +17,7 @@ import {
   programmesFromCourses,
   removeCourse,
   removeQuestion,
+  sameCourses,
   resizeQuestions,
   selectAllEligibleCourses,
   semestersFromCourses,
@@ -368,4 +371,48 @@ test("programme filter keeps courses for that programme and hand-added electives
   assert.deepEqual(programmesFromCourses(courses), ["BE CSE", "BE CSE (AI&ML)"]);
   assert.equal(programmeLabel("BE CSE (AI&ML)"), "AI&ML");
   assert.equal(programmeLabel("BE CSE"), "CSE");
+});
+
+test("copyQuestionCourses repeats the previous question's semester and courses", () => {
+  const start = [
+    question({ text: "Core", semester: 3, course_ids: ["c1", "c2"] }),
+    question({ text: "Second", semester: null, course_ids: ["c5"] }),
+  ];
+
+  const copied = copyQuestionCourses(start, 0, 1);
+
+  assert.equal(copied[1].text, "Second"); // wording is kept
+  assert.equal(copied[1].semester, 3);
+  assert.deepEqual(copied[1].course_ids, ["c1", "c2"]);
+  assert.equal(copied[0], start[0]);
+  assert.equal(copyQuestionCourses(start, 0, 0), start);
+  assert.equal(copyQuestionCourses(start, 0, 5), start);
+});
+
+test("copies can be edited without changing the question they came from", () => {
+  let questions = copyFirstQuestionToAll([
+    question({ semester: 3, course_ids: ["c1", "c2"] }),
+    question(),
+    question({ course_ids: ["c5"] }),
+  ]);
+  assert.deepEqual(
+    questions.map((q) => [q.semester, q.course_ids]),
+    [[3, ["c1", "c2"]], [3, ["c1", "c2"]], [3, ["c1", "c2"]]],
+  );
+
+  questions = removeCourse(questions, 1, "c1");
+  questions = toggleCourse(questions, 2, "c3");
+
+  assert.deepEqual(questions[0].course_ids, ["c1", "c2"]);
+  assert.deepEqual(questions[1].course_ids, ["c2"]);
+  assert.deepEqual(questions[2].course_ids, ["c1", "c2", "c3"]);
+});
+
+test("sameCourses compares semester and courses in any order", () => {
+  assert.equal(
+    sameCourses(question({ semester: 3, course_ids: ["c1", "c2"] }), question({ semester: 3, course_ids: ["c2", "c1"] })),
+    true,
+  );
+  assert.equal(sameCourses(question({ course_ids: ["c1"] }), question({ course_ids: ["c2"] })), false);
+  assert.equal(sameCourses(question({ semester: 3 }), question({ semester: null })), false);
 });

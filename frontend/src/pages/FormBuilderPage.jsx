@@ -16,6 +16,8 @@ import {
   buildFormPayload,
   clampQuestionCount,
   clearQuestionCourses,
+  copyFirstQuestionToAll,
+  copyQuestionCourses,
   courseGroups,
   coursesForSemester,
   defaultQuestionText,
@@ -24,6 +26,7 @@ import {
   programmesFromCourses,
   removeCourse,
   removeQuestion,
+  sameCourses,
   resizeQuestions,
   selectAllEligibleCourses,
   semestersFromCourses,
@@ -241,6 +244,56 @@ export default function FormBuilderPage() {
     const removedText = questions[index]?.text || defaultQuestionText(index);
     replaceQuestions(removeQuestion(questions, index));
     setNotice(`Removed ${removedText}.`);
+  };
+
+  // Faculty pick a different course per question, so copies need enough courses.
+  const tooFewCoursesWarning = (courseCount) =>
+    courseCount < questions.length
+      ? ` Faculty pick a different course for each of the ${questions.length} questions, so add more courses before publishing.`
+      : "";
+
+  const handleCopyFromPrevious = (index) => {
+    const source = questions[index - 1];
+    const target = questions[index];
+    if (!source || !target) return;
+    if (
+      target.course_ids.length > 0 &&
+      !sameCourses(source, target) &&
+      !window.confirm(
+        `Replace the ${target.course_ids.length} course(s) in Question ${index + 1} with those of Question ${index}?`,
+      )
+    ) {
+      return;
+    }
+    setQuestions(copyQuestionCourses(questions, index - 1, index));
+    setQuestionNotices((current) => ({
+      ...current,
+      [target.key]:
+        `Copied ${source.course_ids.length} course(s) from Question ${index}. You can still add or remove courses here.` +
+        tooFewCoursesWarning(source.course_ids.length),
+    }));
+  };
+
+  const handleCopyFirstToAll = () => {
+    const [first, ...rest] = questions;
+    if (!first || rest.length === 0) return;
+    const overwritten = rest.filter(
+      (question) => question.course_ids.length > 0 && !sameCourses(first, question),
+    ).length;
+    if (
+      overwritten > 0 &&
+      !window.confirm(
+        `Replace the courses in ${overwritten} question(s) with those of Question 1?`,
+      )
+    ) {
+      return;
+    }
+    setQuestions(copyFirstQuestionToAll(questions));
+    setQuestionNotices({});
+    setNotice(
+      `Questions 2–${questions.length} now offer the same ${first.course_ids.length} course(s) as Question 1. Each question can still be changed on its own.` +
+        tooFewCoursesWarning(first.course_ids.length),
+    );
   };
 
   const moveQuestion = (index, direction) => {
@@ -588,16 +641,28 @@ export default function FormBuilderPage() {
 
       <div className="section-heading">
         <h2>Preference questions</h2>
-        <button
-          type="button"
-          id="btn-add-preference-question"
-          data-testid="btn-add-preference-question"
-          className="btn btn-secondary"
-          onClick={handleAddQuestion}
-          disabled={questions.length >= MAX_QUESTIONS}
-        >
-          + Add Preference Question
-        </button>
+        <div className="section-actions">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            data-testid="btn-copy-first-to-all"
+            onClick={handleCopyFirstToAll}
+            disabled={questions.length < 2 || questions[0].course_ids.length === 0}
+            title="Give every question the same semester and courses as Question 1"
+          >
+            Copy Question 1 to all
+          </button>
+          <button
+            type="button"
+            id="btn-add-preference-question"
+            data-testid="btn-add-preference-question"
+            className="btn btn-secondary"
+            onClick={handleAddQuestion}
+            disabled={questions.length >= MAX_QUESTIONS}
+          >
+            + Add Preference Question
+          </button>
+        </div>
       </div>
 
       <div className="questions-editor">
@@ -730,6 +795,18 @@ export default function FormBuilderPage() {
                 <div className="picker-head">
                   <span className="field-label">Available courses</span>
                   <div className="picker-actions">
+                    {index > 0 ? (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        data-testid={`copy-previous-${index}`}
+                        onClick={() => handleCopyFromPrevious(index)}
+                        disabled={questions[index - 1].course_ids.length === 0}
+                        title={`Use the semester and courses of Question ${index}`}
+                      >
+                        Same as Question {index}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="btn btn-secondary btn-small"

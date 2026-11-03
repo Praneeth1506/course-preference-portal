@@ -75,6 +75,18 @@ html:has(.full-page-loading) {
   margin-bottom: 0.4rem;
 }
 
+/* facultyForm.css gives every .btn-secondary large padding; keep small buttons small. */
+.btn.btn-small {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.84rem;
+}
+
+.section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .picker-actions {
   display: flex;
   flex-wrap: wrap;

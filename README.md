@@ -175,6 +175,9 @@ the database is unreachable.
    courses faculty may choose. The same course can be offered in several
    questions. Every question needs at least one course, and there must be
    enough distinct courses for faculty to pick a different one per question.
+   **Same as Question N** copies the semester and courses of the question
+   above, and **Copy Question 1 to all** gives every question those of the
+   first; each copy can then be edited on its own.
 4. Use **Preview** to check the configuration, then **Save draft** or
    **Publish form**.
 5. The share panel displays the real public URL. Use **Copy link** or **Open
