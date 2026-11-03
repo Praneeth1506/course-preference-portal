@@ -7,7 +7,12 @@ import {
   Loading,
   StatusBadge,
 } from "../components";
-import { formatDateTime, publicUrlForForm } from "../utils";
+import {
+  formatDateTime,
+  publicUrlForForm,
+  responsesFileName,
+  saveBlob,
+} from "../utils";
 
 export default function ResponsesPage() {
   const { formId } = useParams();
@@ -15,6 +20,8 @@ export default function ResponsesPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -43,6 +50,21 @@ export default function ResponsesPage() {
 
   const publicUrl = publicUrlForForm(form);
 
+  const handleDownload = async () => {
+    setDownloading(true);
+    setDownloadError("");
+    try {
+      // Submission times in the sheet use this browser's time zone, like the page.
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const blob = await api.downloadResponses(formId, timeZone);
+      saveBlob(blob, responsesFileName(form?.title || data?.form_title));
+    } catch (requestError) {
+      setDownloadError(`Could not download the responses: ${requestError.message}`);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -63,6 +85,20 @@ export default function ResponsesPage() {
           </p>
         </div>
         <div className="actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            data-testid="btn-download-excel"
+            onClick={handleDownload}
+            disabled={loading || downloading || !data || data.total === 0}
+            title={
+              data?.total === 0
+                ? "There are no responses to download yet"
+                : "Download every response as an Excel workbook"
+            }
+          >
+            {downloading ? "Preparing…" : "Download Excel"}
+          </button>
           <button
             type="button"
             className="btn btn-secondary"
@@ -94,6 +130,7 @@ export default function ResponsesPage() {
       </div>
 
       <ErrorBanner error={error} />
+      <ErrorBanner error={downloadError} />
 
       {loading ? (
         <Loading label="Loading responses…" />

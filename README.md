@@ -35,7 +35,7 @@ MongoDB, and JSON over HTTP.
   faculty ID is rejected and the first response is kept.
 - Response storage in the `responses` collection with a UTC submission time.
 - Authenticated admin response view with faculty details, question text, course
-  code/name, and localized submission time.
+  code/name, and localized submission time, with a **Download Excel** button.
 - Backend test suite plus a live HTTP smoke-test script.
 
 ## Stack and layout
@@ -248,6 +248,7 @@ an absolute URL instead, local development origins on any port for
 | PUT    | `/api/forms/{id}`                 | Admin       | Update a draft or published form |
 | POST   | `/api/forms/{id}/publish`         | Admin       | Publish and return public link   |
 | GET    | `/api/forms/{id}/responses`       | Admin       | List responses, newest first     |
+| GET    | `/api/forms/{id}/responses/export`| Admin       | Download responses as `.xlsx`    |
 | GET    | `/api/public/forms/{token}`       | Public      | Retrieve a published form        |
 | POST   | `/api/public/forms/{token}/responses` | Public  | Validate and save a response     |
 
@@ -385,6 +386,7 @@ first, with a bulk course lookup rather than one query per answer:
 {
   "form_id": "6710...",
   "form_title": "Faculty Course Preferences",
+  "questions": [{ "question_id": "q1", "text": "Preferred course for Semester 3" }],
   "responses": [
     {
       "response_id": "6713...",
@@ -408,6 +410,21 @@ first, with a bulk course lookup rather than one query per answer:
 ```
 
 An empty form returns `"responses": []` and `"total": 0`.
+
+### Excel export
+
+`GET /api/forms/{id}/responses/export?tz=Asia/Kolkata` returns an `.xlsx`
+workbook (built with openpyxl in `backend/app/export.py`):
+
+- **Responses**: one row per faculty member, oldest first, with the submission
+  time in `tz` (UTC if missing or unknown) and a code and a course column per
+  question. Answers to questions removed from a published form come last,
+  marked "(removed)".
+- **Course summary**: each chosen course with how many faculty picked it for
+  each question, and a total, most chosen first.
+
+The Responses page sends the browser's time zone. Faculty-typed values are
+stored as text, so a name starting with `=` is never treated as a formula.
 
 ### Common status codes
 

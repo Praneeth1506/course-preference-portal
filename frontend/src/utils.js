@@ -22,3 +22,24 @@ export function semesterLabel(semester) {
     ? "Semester not set"
     : `Semester ${semester}`;
 }
+
+// Matches the backend's download name, e.g. "Fall-2026-responses.xlsx".
+export function responsesFileName(title) {
+  const slug = (title || "")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return `${slug || "form"}-responses.xlsx`;
+}
+
+export function saveBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Give the browser a moment to start the download before revoking.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

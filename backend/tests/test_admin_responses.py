@@ -56,6 +56,7 @@ def test_empty_response_list(client, db, admin_headers):
     assert response.json() == {
         "form_id": form["form_id"],
         "form_title": "Test Form",
+        "questions": [{"question_id": "q1", "text": "Question q1"}],
         "responses": [],
         "total": 0,
     }

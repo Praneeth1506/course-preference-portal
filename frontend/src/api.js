@@ -70,6 +70,8 @@ async function request(path, options = {}) {
     body,
     auth = true,
     signal,
+    // "blob" returns the body as a Blob, for file downloads.
+    as = "json",
   } = options;
 
   const headers = { Accept: "application/json" };
@@ -92,6 +94,10 @@ async function request(path, options = {}) {
       "Unable to reach the server. Please check that the backend is running.",
       0,
     );
+  }
+
+  if (response.ok && as === "blob") {
+    return response.blob();
   }
 
   const text = await response.text();
@@ -162,6 +168,14 @@ export const api = {
     }),
   listResponses: (formId) =>
     request(`/forms/${encodeURIComponent(formId)}/responses`),
+  // An .xlsx Blob; timeZone (IANA name) sets the submission times' zone.
+  downloadResponses: (formId, timeZone) =>
+    request(
+      `/forms/${encodeURIComponent(formId)}/responses/export${
+        timeZone ? `?tz=${encodeURIComponent(timeZone)}` : ""
+      }`,
+      { as: "blob" },
+    ),
   getPublicForm: (token) =>
     request(`/public/forms/${encodeURIComponent(token)}`, { auth: false }),
   submitResponse: (token, payload) =>

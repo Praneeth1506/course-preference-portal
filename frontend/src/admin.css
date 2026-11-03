@@ -196,8 +196,7 @@ html:has(.full-page-loading) {
 }
 
 /* facultyForm.css styles .btn-primary at full width for every page. */
-.elective-form .actions .btn,
-.sticky-actions .actions .btn {
+.app-shell .actions .btn {
   width: auto;
 }
 

@@ -11,14 +11,16 @@ from __future__ import annotations
 import logging
 import secrets
 from typing import Any
+from urllib.parse import quote
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from ..config import settings
 from ..database import get_database
+from ..export import XLSX_MEDIA_TYPE, export_filename, responses_workbook
 from ..schemas import FormCreate, FormUpdate, PublishResponse, QuestionInput
 from ..security import get_current_admin
 from ..utils import (
@@ -582,12 +584,8 @@ def publish_form(
     return _publish_response(published)
 
 
-@router.get("/{form_id}/responses")
-def list_responses(
-    form_id: str,
-    db: Database = Depends(get_database),
-    _admin: str = Depends(get_current_admin),
-) -> dict[str, Any]:
+def _response_listing(db: Database, form_id: str) -> dict[str, Any]:
+    """Load a form's responses with course details, newest first."""
     object_id = parse_object_id(form_id, "form ID")
     try:
         form = db.forms.find_one({"_id": object_id})
@@ -676,6 +674,46 @@ def list_responses(
     return {
         "form_id": str(form["_id"]),
         "form_title": form.get("title", ""),
+        "questions": [
+            {"question_id": question.get("question_id"), "text": question.get("text", "")}
+            for question in questions
+        ],
         "responses": serialized_responses,
         "total": len(serialized_responses),
     }
+
+
+@router.get("/{form_id}/responses")
+def list_responses(
+    form_id: str,
+    db: Database = Depends(get_database),
+    _admin: str = Depends(get_current_admin),
+) -> dict[str, Any]:
+    return _response_listing(db, form_id)
+
+
+@router.get("/{form_id}/responses/export")
+def export_responses(
+    form_id: str,
+    tz: str | None = Query(default=None, max_length=64),
+    db: Database = Depends(get_database),
+    _admin: str = Depends(get_current_admin),
+) -> Response:
+    """Download the responses as an Excel workbook.
+
+    ``tz`` is the admin's IANA time zone for the submission times; UTC if
+    missing or unknown.
+    """
+    listing = _response_listing(db, form_id)
+    content = responses_workbook(listing, tz)
+    filename = export_filename(listing["form_title"])
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{filename}\"; "
+                f"filename*=UTF-8''{quote(filename)}"
+            )
+        },
+    )
